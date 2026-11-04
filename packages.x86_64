@@ -1,0 +1,30 @@
+# Base system
+base
+linux
+linux-firmware
+systemd
+systemd-sysvcompat
+syslinux
+mkinitcpio
+mkinitcpio-archiso
+
+# Network and terminal tools
+networkmanager
+openssh
+sudo
+nano
+htop
+git
+less
+man-db
+man-pages
+bash-completion
+curl
+wget
+arch-install-scripts
+archinstall
+dosfstools
+e2fsprogs
+btrfs-progs
+parted
+gptfdisk

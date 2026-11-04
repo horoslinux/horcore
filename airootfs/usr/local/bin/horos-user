@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Bu işlem root gerektirir. Live ISO'da root oturumunda çalıştır."
+  exit 1
+fi
+
+while true; do
+  read -rp "Yeni kullanıcı adı: " username
+  if [[ "$username" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] && ! id "$username" &>/dev/null; then
+    break
+  fi
+  echo "Geçersiz veya zaten kullanılan kullanıcı adı."
+done
+
+while true; do
+  read -rsp "Parola: " password; echo
+  read -rsp "Parolayı tekrar gir: " confirm; echo
+  if [[ -n "$password" && "$password" == "$confirm" ]]; then
+    break
+  fi
+  echo "Parolalar boş olamaz ve eşleşmelidir."
+done
+
+useradd -m -G wheel -s /bin/bash "$username"
+printf '%s:%s\n' "$username" "$password" | chpasswd
+unset password confirm
+
+install -d -m 0750 /etc/sudoers.d
+printf '%%wheel ALL=(ALL:ALL) ALL\n' > /etc/sudoers.d/10-wheel
+chmod 0440 /etc/sudoers.d/10-wheel
+visudo -cf /etc/sudoers.d/10-wheel
+
+echo "Kullanıcı oluşturuldu. Live ortamındaki değişiklikler yeniden başlatınca silinir."

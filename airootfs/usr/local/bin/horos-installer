@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Kurulum aracı root olarak çalıştırılmalı."
+  exit 1
+fi
+
+cat <<'INFO'
+HorOS Linux Installer
+
+Bu araç Archinstall'ın etkileşimli kurulum arayüzünü açar.
+Disk bölümleme ve biçimlendirme sırasında seçtiğin hedef disk üzerindeki
+veriler silinebilir. Devam etmeden önce yedek al.
+INFO
+read -rp "Archinstall'ı başlatmak için INSTALL yaz: " answer
+if [[ "$answer" != "INSTALL" ]]; then
+  echo "İptal edildi."
+  exit 0
+fi
+
+exec archinstall

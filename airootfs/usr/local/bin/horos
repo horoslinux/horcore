@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+while true; do
+  clear
+  cat <<'BANNER'
+ _   _            ___  ____  
+| | | | ___  _ __/ _ \/ ___| 
+| |_| |/ _ \| '__| | | \___ \
+|  _  | (_) | |  | |_| |___) |
+|_| |_|\___/|_|   \___/|____/
+
+          HorOS Linux
+BANNER
+  echo
+  echo "1) Live terminal"
+  echo "2) Kullanıcı oluştur (Live)"
+  echo "3) Diske kur (archinstall)"
+  echo "4) Yeniden başlat"
+  echo "5) Kapat"
+  echo
+  read -rp "Seçim [1-5]: " choice
+  case "$choice" in
+    1) exec bash ;;
+    2) /usr/local/bin/horos-user ;;
+    3) /usr/local/bin/horos-installer ;;
+    4) systemctl reboot ;;
+    5) systemctl poweroff ;;
+    *) echo "Geçersiz seçim"; sleep 1 ;;
+  esac
+done
