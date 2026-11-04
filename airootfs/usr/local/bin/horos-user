@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# HorOS Linux — Live ortamında normal kullanıcı oluşturur
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -8,10 +9,13 @@ fi
 
 while true; do
   read -rp "Yeni kullanıcı adı: " username
-  if [[ "$username" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] && ! id "$username" &>/dev/null; then
+  if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    echo "Geçersiz kullanıcı adı (küçük harf, rakam, _ ve - kullan)."
+  elif id "$username" &>/dev/null; then
+    echo "Bu kullanıcı zaten var."
+  else
     break
   fi
-  echo "Geçersiz veya zaten kullanılan kullanıcı adı."
 done
 
 while true; do
@@ -23,6 +27,7 @@ while true; do
   echo "Parolalar boş olamaz ve eşleşmelidir."
 done
 
+getent group wheel >/dev/null || groupadd -r wheel
 useradd -m -G wheel -s /bin/bash "$username"
 printf '%s:%s\n' "$username" "$password" | chpasswd
 unset password confirm
@@ -30,6 +35,8 @@ unset password confirm
 install -d -m 0750 /etc/sudoers.d
 printf '%%wheel ALL=(ALL:ALL) ALL\n' > /etc/sudoers.d/10-wheel
 chmod 0440 /etc/sudoers.d/10-wheel
-visudo -cf /etc/sudoers.d/10-wheel
+visudo -cf /etc/sudoers.d/10-wheel >/dev/null
 
-echo "Kullanıcı oluşturuldu. Live ortamındaki değişiklikler yeniden başlatınca silinir."
+echo "Kullanıcı '$username' oluşturuldu (sudo yetkili)."
+echo "Giriş için: su - $username"
+echo "Live ortamındaki değişiklikler yeniden başlatınca silinir."

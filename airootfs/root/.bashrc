@@ -1,5 +1,7 @@
 export EDITOR=nano
 export VISUAL=nano
 alias ll='ls -lah'
-printf '\nHorOS Linux | terminal-first Arch environment\n'
-printf 'Başlamak için: horos\n\n'
+[[ $- == *i* ]] || return
+PS1='\[\e[1;33m\]horos\[\e[0m\]:\w\$ '
+printf '\nHorOS Linux | terminal-first Arch tabanlı ortam\n'
+printf 'Menü için: horos\n\n'

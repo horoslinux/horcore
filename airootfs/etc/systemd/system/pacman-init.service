@@ -1,0 +1,13 @@
+[Unit]
+Description=HorOS: initialize pacman keyring
+After=systemd-random-seed.service
+Before=reflector.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/pacman-key --init
+ExecStart=/usr/bin/pacman-key --populate archlinux
+
+[Install]
+WantedBy=multi-user.target

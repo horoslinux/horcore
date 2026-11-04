@@ -2,14 +2,26 @@
 base
 linux
 linux-firmware
+amd-ucode
+intel-ucode
 systemd
 systemd-sysvcompat
-syslinux
 mkinitcpio
 mkinitcpio-archiso
+mkinitcpio-nfs-utils
+nbd
+
+# Boot (BIOS + UEFI)
+syslinux
+memtest86+
+memtest86+-efi
+hwdata
 
 # Network and terminal tools
 networkmanager
+wpa_supplicant
+iw
+reflector
 openssh
 sudo
 nano
@@ -21,6 +33,8 @@ man-pages
 bash-completion
 curl
 wget
+
+# Installer (archinstall) and disk tools
 arch-install-scripts
 archinstall
 dosfstools

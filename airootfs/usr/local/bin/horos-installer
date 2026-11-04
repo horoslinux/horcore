@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# HorOS Linux — diske kurulum (archinstall tabanlı)
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -6,14 +7,28 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+if ! command -v archinstall >/dev/null; then
+  echo "archinstall bulunamadı." >&2
+  exit 1
+fi
+
 cat <<'INFO'
 HorOS Linux Installer
 
-Bu araç Archinstall'ın etkileşimli kurulum arayüzünü açar.
-Disk bölümleme ve biçimlendirme sırasında seçtiğin hedef disk üzerindeki
-veriler silinebilir. Devam etmeden önce yedek al.
+Bu araç archinstall'ın etkileşimli kurulum arayüzünü açar.
+İnternet bağlantısı gerekir (kablolu bağlantı otomatik kurulur;
+Wi-Fi için: nmtui).
+Disk bölümleme sırasında seçtiğin hedef diskteki veriler silinebilir.
+Devam etmeden önce yedek al.
 INFO
-read -rp "Archinstall'ı başlatmak için INSTALL yaz: " answer
+
+if ! ping -c1 -W3 archlinux.org &>/dev/null; then
+  echo
+  echo "UYARI: İnternet bağlantısı görünmüyor. Kurulum için önce 'nmtui' ile bağlan."
+fi
+
+echo
+read -rp "archinstall'ı başlatmak için INSTALL yaz: " answer
 if [[ "$answer" != "INSTALL" ]]; then
   echo "İptal edildi."
   exit 0

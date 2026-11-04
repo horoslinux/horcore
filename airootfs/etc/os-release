@@ -1,0 +1,6 @@
+NAME="HorOS Linux"
+PRETTY_NAME="HorOS Linux"
+ID=horos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;255;193;7"
