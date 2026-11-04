@@ -1,57 +1,57 @@
 # HorOS Linux
 
-Arch Linux tabanlı, terminal odaklı Live ISO ve terminal kurulum sihirbazı.
+A terminal-focused Live ISO and terminal installation wizard based on Arch Linux.
 
-## Gereksinimler
+## Requirements
 
-- x86_64 Arch Linux üzerinde build
+- Build on x86_64 Arch Linux
 - `archiso`, `git`, `base-devel`
-- ISO test etmek için `qemu-desktop`
+- `qemu-desktop` to test the ISO
 
 ```bash
 sudo pacman -Syu
 sudo pacman -S archiso git base-devel qemu-desktop
 ```
 
-## ISO oluşturma
+## Create ISO
 
 ```bash
 cd horcore
-sudo ./build.sh        # takılırsa: sudo ./build.sh --clean
+sudo ./build.sh        # if needed: sudo ./build.sh --clean
 ```
 
-ISO `out/` klasörüne yazılır. Build çalışma alanı `work/` klasöründedir.
+The ISO is written to the `out/` directory. The build workspace is in `work/`.
 
 ## Test
 
 ```bash
 ./test-qemu.sh            # BIOS
-UEFI=1 ./test-qemu.sh     # UEFI (edk2-ovmf gerekir)
+UEFI=1 ./test-qemu.sh     # UEFI (requires edk2-ovmf)
 ```
 
 ## Live ISO
 
-- tty1'de root otomatik giriş yapılır (kullanıcı adı/parola sorulmaz) ve `horos` menüsü açılır.
-- Menüden çıkmak için `Live terminal` seç; shell'den çıkınca menü tekrar açılır.
-- Menüyü atlamak için: `HOROS_NO_MENU=1` ile giriş yap.
-- `horos-user` komutu Live oturumunda normal kullanıcı oluşturur.
-- Live ISO kalıcı depolama değildir; yeniden başlatınca değişiklikler kaybolur.
+- On tty1, root is automatically logged in (no username/password prompt), and the `horos` menu opens.
+- To exit the menu, select `Live terminal`; when you exit the shell, the menu opens again.
+- To skip the menu, log in with `HOROS_NO_MENU=1`.
+- The `horos-user` command creates a normal user in the live session.
+- The Live ISO is not persistent storage; changes are lost after reboot.
+- The `Live ISO` is not persistent storage; changes are lost on restart.
 
-## Diske kurulum
+## Installation to Disk
 
-Menüden `HorOS'u diske kur` seçeneği, `archinstall` aracını başlatır.
-`archinstall` disk bölümleme ve kurulum adımlarını etkileşimli olarak yürütür.
-Kurulum sırasında hedef diski dikkatle seç. Yanlış disk seçimi veri kaybına neden olabilir.
+Selecting `Install HorOS to disk` from the menu launches the `archinstall` tool.
+`archinstall` guides you through disk partitioning and installation interactively.
+During installation, select the target disk carefully. Choosing the wrong disk can cause data loss.
 
-Kurulu sistemin `os-release` dosyası archinstall'dan geldiği için şimdilik Arch olarak görünür.
-Bu ilk sürüm, HorOS markalı bir Archiso ve terminal kurulum girişidir. `archinstall`
-upstream aracıdır; kurulum ekranlarının tümü HorOS tarafından yazılmış değildir.
+Because the installed system's `os-release` file comes from `archinstall`, it currently appears as Arch.
+This first release is a HorOS-branded Archiso and a terminal-based installation experience. `archinstall` is the upstream tool; not all installation screens are written by HorOS.
 
-## Özelleştirme
+## Customization
 
-- Paketler: `packages.x86_64`
-- ISO kimliği: `profiledef.sh`
-- Live servisleri ve komutları: `airootfs/usr/local/bin/`
-- Shell karşılama: `airootfs/etc/motd`, `airootfs/etc/issue`, `airootfs/etc/os-release`
-- Otomatik giriş: `airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf`
-- Boot menüsü: `syslinux/` (BIOS), `efiboot/` (UEFI)
+- Packages: `packages.x86_64`
+- ISO identity: `profiledef.sh`
+- Live services and commands: `airootfs/usr/local/bin/`
+- Shell greeting: `airootfs/etc/motd`, `airootfs/etc/issue`, `airootfs/etc/os-release`
+- Automatic login: `airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf`
+- Boot menu: `syslinux/` (BIOS), `efiboot/` (UEFI)
