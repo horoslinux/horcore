@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# HorOS Linux — diske kurulum (archinstall tabanlı)
+# HorOS Linux — diske kurulum (archinstall tabanlı, sunucu ön ayarlı)
 set -euo pipefail
+
+LIMON_URL="https://aardaakpinar.github.io/limon/install.sh"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Kurulum aracı root olarak çalıştırılmalı."
@@ -16,7 +18,9 @@ cat <<'INFO'
 HorOS Linux Installer
 
 Bu araç archinstall'ın etkileşimli kurulum arayüzünü açar.
-İnternet bağlantısı gerekir (kablolu bağlantı otomatik kurulur;
+Sistem olabildiğince boş kurulur (masaüstü yok, ek paket yok);
+disk, kullanıcı, ağ ve dil seçimlerini archinstall içinde sen yaparsın.
+Internet bağlantısı gerekir (kablolu bağlantı otomatik kurulur;
 Wi-Fi için: nmtui).
 Disk bölümleme sırasında seçtiğin hedef diskteki veriler silinebilir.
 Devam etmeden önce yedek al.
@@ -27,11 +31,119 @@ if ! ping -c1 -W3 archlinux.org &>/dev/null; then
   echo "UYARI: İnternet bağlantısı görünmüyor. Kurulum için önce 'nmtui' ile bağlan."
 fi
 
+# --- Konum tespiti (IP'den): saat dilimi ve ülke ---
+KEYMAP_DIR="${KEYMAP_DIR:-/usr/share/kbd/keymaps}"
+
+ip_lookup() { # $1: alan (timezone | country)
+  local url val
+  for url in "https://ipapi.co/$1" "https://ipinfo.io/$1"; do
+    val="$(curl -fsS --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')" || continue
+    if [[ "$val" =~ ^[A-Za-z0-9_+/-]+$ ]]; then
+      echo "$val"
+      return 0
+    fi
+  done
+  return 1
+}
+
+timezone="$(ip_lookup timezone || true)"
+[[ -n "$timezone" && -f "/usr/share/zoneinfo/$timezone" ]] || timezone=""
+country="$(ip_lookup country || true)"
+[[ "$country" =~ ^[A-Z]{2}$ ]] || country=""
+
+keymap_for_country() {
+  case "$1" in
+    TR) echo trq ;;       US) echo us ;;         GB) echo uk ;;
+    DE|AT) echo de-latin1 ;;  FR) echo fr ;;     ES) echo es ;;
+    IT) echo it ;;        PT) echo pt-latin1 ;;  BR) echo br-abnt2 ;;
+    NL) echo nl ;;        BE) echo be-latin1 ;;  CH) echo sg-latin1 ;;
+    SE) echo sv-latin1 ;; NO) echo no ;;         DK) echo dk ;;
+    FI) echo fi ;;        PL) echo pl ;;         CZ) echo cz-lat2 ;;
+    RU) echo ru ;;        UA) echo ua ;;         GR) echo gr ;;
+    HU) echo hu ;;        RO) echo ro ;;         IE) echo ie ;;
+    JP) echo jp106 ;;
+    *) echo us ;;
+  esac
+}
+
+keymap_exists() {
+  [[ -d "$KEYMAP_DIR" ]] || return 0   # doğrulanamıyorsa engelleme
+  find "$KEYMAP_DIR" -type f \( -name "$1.map" -o -name "$1.map.gz" \) 2>/dev/null | grep -q .
+}
+
+# --- Klavye düzeni: öner, kullanıcıdan onay al (yanlış düzen parola girişini bozar) ---
+kb_default="$(keymap_for_country "$country")"
+keymap_exists "$kb_default" || kb_default=us
+echo
+if [[ -n "$country" ]]; then
+  echo "Tespit edilen ülke: $country"
+fi
+echo "Parolanı bu düzenle yazacaksın; doğru düzeni seçtiğinden emin ol."
+while true; do
+  read -rp "Klavye düzeni [$kb_default] (Enter = kabul; başka için adını yaz: us, trq, trf, uk, de-latin1...): " kb_in || kb_in=""
+  kb="${kb_in:-$kb_default}"
+  if keymap_exists "$kb"; then break; fi
+  echo "'$kb' bulunamadı. Tüm düzenler için: localectl list-keymaps"
+done
+loadkeys "$kb" 2>/dev/null || true   # bu oturumda hemen uygula (parola girişleri için)
+
+# --- Sunucu seçenekleri ---
+echo
+read -rp "SSH sunucusu (openssh) kurulup açılsın mı? [E/h]: " ssh_ans || ssh_ans=""
+case "${ssh_ans:-E}" in
+  [Hh]*) ssh=0 ;;
+  *)     ssh=1 ;;
+esac
+
+echo
+echo "AI asistanı (limon) kurulsun mu? Yalnızca seçtiğin sağlayıcının SDK'sı kurulur."
+echo "  1) Hayır"
+echo "  2) Evet — Claude"
+echo "  3) Evet — OpenAI"
+echo "  4) Evet — Gemini"
+echo "  5) Evet — hepsi"
+read -rp "Seçim [1-5, varsayılan 1]: " limon_ans || limon_ans=""
+case "${limon_ans:-1}" in
+  2) extras=claude ;;
+  3) extras=openai ;;
+  4) extras=gemini ;;
+  5) extras=all ;;
+  *) extras="" ;;
+esac
+
+# --- archinstall için kısmi yapılandırma (diğer menüler interaktif kalır) ---
+cfg="$(mktemp --suffix=.json /tmp/horos-archinstall.XXXXXX)"
+python3 - "$cfg" "$ssh" "$extras" "$LIMON_URL" "$timezone" "$kb" <<'PY'
+import json, sys
+path, ssh, extras, url, timezone, kb = sys.argv[1:7]
+packages = ["nano"]
+commands = []
+if ssh == "1":
+    packages.append("openssh")
+    commands.append("systemctl enable sshd.service")
+if extras:
+    packages += ["python", "git"]
+    commands.append(
+        f"curl -fsSL {url} | bash -s -- --extras {extras} "
+        f"|| echo 'HorOS: limon kurulamadi. Sonra elle kur: curl -fsSL {url} | bash'"
+    )
+config = {"hostname": "horos", "packages": packages, "custom_commands": commands}
+if timezone:
+    config["timezone"] = timezone
+config["locale_config"] = {"kb_layout": kb, "sys_lang": "en_US", "sys_enc": "UTF-8"}
+json.dump(config, open(path, "w"), indent=2, ensure_ascii=False)
+PY
+
+echo
+echo "Kurulum ön ayarları ($cfg):"
+cat "$cfg"
+
 echo
 read -rp "archinstall'ı başlatmak için INSTALL yaz: " answer
 if [[ "$answer" != "INSTALL" ]]; then
   echo "İptal edildi."
+  rm -f "$cfg"
   exit 0
 fi
 
-exec archinstall
+exec archinstall --config "$cfg"

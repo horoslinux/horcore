@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=HorOS
+Description=HorOS yukleme ekrani
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/horos
+ScriptFile=/usr/share/plymouth/themes/horos/horos.script

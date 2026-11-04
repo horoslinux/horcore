@@ -1,0 +1,48 @@
+Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
+
+sw = Window.GetWidth();
+sh = Window.GetHeight();
+
+# Logo
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(sw / 2 - logo.image.GetWidth() / 2);
+logo.sprite.SetY(sh / 2 - logo.image.GetHeight() / 2 - 30);
+
+# Yükleme çubuğu
+bar_w = 260;
+bar_h = 4;
+seg_w = 90;
+bar_x = sw / 2 - bar_w / 2;
+bar_y = sh / 2 + logo.image.GetHeight() / 2 + 10;
+
+# Koyu gri arka iz
+track.image = Image("track.png").Scale(bar_w, bar_h);
+track.sprite = Sprite(track.image);
+track.sprite.SetPosition(bar_x, bar_y, 1);
+
+# Accent: #FDC41D
+seg.image = Image("seg.png").Scale(seg_w, bar_h);
+seg.sprite = Sprite(seg.image);
+seg.sprite.SetPosition(bar_x, bar_y, 2);
+
+frame = 0;
+dir = 1;
+steps = 60;
+
+fun refresh_callback() {
+  frame += dir;
+
+  if (frame >= steps) dir = -1;
+  if (frame <= 0) dir = 1;
+
+  p = frame / steps;
+
+  # Smooth ease-in-out
+  e = p * p * (3 - 2 * p);
+
+  seg.sprite.SetX(bar_x + e * (bar_w - seg_w));
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
