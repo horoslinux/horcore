@@ -19,6 +19,5 @@ file_permissions=(
   ["/etc/sudoers.d/10-wheel"]="0:0:440"
   ["/root"]="0:0:750"
   ["/usr/local/bin/horos"]="0:0:755"
-  ["/usr/local/bin/horos-user"]="0:0:755"
   ["/usr/local/bin/horos-installer"]="0:0:755"
 )

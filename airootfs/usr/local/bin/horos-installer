@@ -3,6 +3,8 @@
 set -euo pipefail
 
 LIMON_URL="https://aardaakpinar.github.io/limon/install.sh"
+PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
+profile="${1:-}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Kurulum aracı root olarak çalıştırılmalı."
@@ -26,6 +28,59 @@ Disk bölümleme sırasında seçtiğin hedef diskteki veriler silinebilir.
 Devam etmeden önce yedek al.
 INFO
 
+# --- Kurulum öncesi hazırlık: archinstall'ın "pacman -Sy" adımı bunlara bağlı ---
+wait_unit() { # $1 unit, $2 mesaj, $3 en fazla saniye
+  local unit="$1" msg="$2" max="${3:-90}" i=0 st
+  while (( i < max )); do
+    st="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    case "$st" in activating|reloading) ;; *) return 0 ;; esac
+    (( i == 0 )) && echo "$msg"
+    sleep 1; i=$((i + 1))
+  done
+  echo "UYARI: $unit $max saniyede bitmedi, devam ediliyor." >&2
+}
+
+prepare_pacman() {
+  wait_unit pacman-init.service "Pacman anahtar deposu hazırlanıyor..." 120
+  wait_unit reflector.service   "Mirror listesi güncelleniyor..." 90
+
+  # Saat yanlışsa HTTPS sertifikaları reddedilir
+  if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" != yes ]]; then
+    echo "Saat eşitleniyor..."
+    timedatectl set-ntp true 2>/dev/null || true
+    local i
+    for i in $(seq 1 15); do
+      [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" == yes ]] && break
+      sleep 1
+    done
+  fi
+
+  echo "Paket veritabanı eşitleniyor..."
+  local out
+  if out="$(pacman -Sy 2>&1)"; then return 0; fi
+
+  echo "İlk deneme başarısız oldu:" >&2
+  tail -n 6 <<<"$out" | sed 's/^/  /' >&2
+
+  if grep -qiE 'signature|pgp|keyring|unknown trust|key ' <<<"$out"; then
+    echo "Anahtar deposu yeniden hazırlanıyor..."
+    pacman-key --init >/dev/null 2>&1 || true
+    pacman-key --populate archlinux >/dev/null 2>&1 || true
+  fi
+  if grep -qiE 'failed retrieving|could not resolve|resolve host|404|timed out|timeout|no servers|failed to connect|connection' <<<"$out"; then
+    echo "Mirror listesi sabit bir mirror'a çevriliyor..."
+    printf 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+  fi
+
+  if out="$(pacman -Sy 2>&1)"; then return 0; fi
+  echo >&2
+  echo "HATA: Paket veritabanı eşitlenemedi. archinstall bu yüzden başlayamaz." >&2
+  tail -n 8 <<<"$out" | sed 's/^/  /' >&2
+  echo >&2
+  echo "Kontrol et: 'systemctl status pacman-init reflector', 'timedatectl', 'ping archlinux.org'" >&2
+  return 1
+}
+
 if ! ping -c1 -W3 archlinux.org &>/dev/null; then
   echo
   echo "UYARI: İnternet bağlantısı görünmüyor. Kurulum için önce 'nmtui' ile bağlan."
@@ -48,6 +103,11 @@ ip_lookup() { # $1: alan (timezone | country)
 
 timezone="$(ip_lookup timezone || true)"
 [[ -n "$timezone" && -f "/usr/share/zoneinfo/$timezone" ]] || timezone=""
+tz_src="IP'den tespit edildi"
+if [[ -z "$timezone" ]]; then
+  timezone="UTC"
+  tz_src="tespit edilemedi, varsayılan"
+fi
 country="$(ip_lookup country || true)"
 [[ "$country" =~ ^[A-Z]{2}$ ]] || country=""
 
@@ -78,6 +138,7 @@ echo
 if [[ -n "$country" ]]; then
   echo "Tespit edilen ülke: $country"
 fi
+echo "Saat dilimi: $timezone ($tz_src); sistem dili: en_US.UTF-8"
 echo "Parolanı bu düzenle yazacaksın; doğru düzeni seçtiğinden emin ol."
 while true; do
   read -rp "Klavye düzeni [$kb_default] (Enter = kabul; başka için adını yaz: us, trq, trf, uk, de-latin1...): " kb_in || kb_in=""
@@ -87,13 +148,43 @@ while true; do
 done
 loadkeys "$kb" 2>/dev/null || true   # bu oturumda hemen uygula (parola girişleri için)
 
-# --- Sunucu seçenekleri ---
+# --- Profil (profiles/ dizinindeki her klasör bir profildir) ---
+mapfile -t profiles < <(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort)
+if (( ${#profiles[@]} == 0 )); then
+  echo "Profil dizini bulunamadı: $PROFILE_DIR" >&2
+  exit 1
+fi
+
+profile_title() {
+  local f="$PROFILE_DIR/$1/title"
+  if [[ -f "$f" ]]; then head -n1 "$f"; else echo "$1"; fi
+}
+
+if [[ -n "$profile" ]]; then
+  if [[ "$profile" == common || ! -d "$PROFILE_DIR/$profile" ]]; then
+    echo "Bilinmeyen profil: $profile (mevcut: ${profiles[*]})" >&2
+    exit 1
+  fi
+else
+  echo
+  echo "Kurulum profili:"
+  i=0
+  for p in "${profiles[@]}"; do
+    i=$((i + 1))
+    printf '  %d) %s\n' "$i" "$(profile_title "$p")"
+  done
+  while true; do
+    read -rp "Seçim [1-${#profiles[@]}, varsayılan 1]: " pc || pc=""
+    pc="${pc:-1}"
+    if [[ "$pc" =~ ^[0-9]+$ ]] && (( 10#$pc >= 1 && 10#$pc <= ${#profiles[@]} )); then
+      profile="${profiles[10#$pc - 1]}"
+      break
+    fi
+    echo "Geçersiz seçim."
+  done
+fi
 echo
-read -rp "SSH sunucusu (openssh) kurulup açılsın mı? [E/h]: " ssh_ans || ssh_ans=""
-case "${ssh_ans:-E}" in
-  [Hh]*) ssh=0 ;;
-  *)     ssh=1 ;;
-esac
+echo "Profil: $(profile_title "$profile")"
 
 echo
 echo "AI asistanı (limon) kurulsun mu? Yalnızca seçtiğin sağlayıcının SDK'sı kurulur."
@@ -113,30 +204,74 @@ esac
 
 # --- archinstall için kısmi yapılandırma (diğer menüler interaktif kalır) ---
 cfg="$(mktemp --suffix=.json /tmp/horos-archinstall.XXXXXX)"
-python3 - "$cfg" "$ssh" "$extras" "$LIMON_URL" "$timezone" "$kb" <<'PY'
-import json, sys
-path, ssh, extras, url, timezone, kb = sys.argv[1:7]
-packages = ["nano"]
-commands = []
-if ssh == "1":
-    packages.append("openssh")
-    commands.append("systemctl enable sshd.service")
+python3 - "$cfg" "$profile" "$extras" "$LIMON_URL" "$timezone" "$kb" "$PROFILE_DIR" <<'PY'
+import base64, json, os, sys
+
+path, profile, extras, url, timezone, kb, pdir = sys.argv[1:8]
+
+
+def read_list(p):
+    if not os.path.isfile(p):
+        return []
+    with open(p, encoding="utf-8") as f:
+        return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+
+
+def file_commands(root):
+    """<profil>/files/<yol> içindeki her dosyayı hedef sistemde /<yol> olarak yazar."""
+    base = os.path.join(root, "files")
+    cmds = []
+    for dirpath, _, names in sorted(os.walk(base)):
+        for name in sorted(names):
+            src = os.path.join(dirpath, name)
+            dest = "/" + os.path.relpath(src, base)
+            with open(src, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            cmds.append(f"mkdir -p {os.path.dirname(dest)} && echo {b64} | base64 -d > {dest}")
+    return cmds
+
+
+packages, services, commands = [], [], []
+for part in ("common", profile):
+    root = os.path.join(pdir, part)
+    packages += read_list(os.path.join(root, "packages"))
+    services += read_list(os.path.join(root, "services"))
+    commands += file_commands(root)
+
+if "nftables" in packages:
+    commands.append(
+        "nft -c -f /etc/nftables.conf "
+        "|| echo 'HorOS: UYARI: guvenlik duvari kurallari dogrulanamadi, /etc/nftables.conf dosyasini kontrol et'"
+    )
+commands += [f"systemctl enable {s}" for s in services]
+
 if extras:
     packages += ["python", "git"]
     commands.append(
         f"curl -fsSL {url} | bash -s -- --extras {extras} "
         f"|| echo 'HorOS: limon kurulamadi. Sonra elle kur: curl -fsSL {url} | bash'"
     )
-config = {"hostname": "horos", "packages": packages, "custom_commands": commands}
-if timezone:
-    config["timezone"] = timezone
-config["locale_config"] = {"kb_layout": kb, "sys_lang": "en_US", "sys_enc": "UTF-8"}
-json.dump(config, open(path, "w"), indent=2, ensure_ascii=False)
-PY
 
-echo
-echo "Kurulum ön ayarları ($cfg):"
-cat "$cfg"
+packages = list(dict.fromkeys(packages))
+config = {
+    "hostname": "horos",
+    "packages": packages,
+    "custom_commands": commands,
+    "timezone": timezone or "UTC",
+    "locale_config": {"kb_layout": kb, "sys_lang": "en_US", "sys_enc": "UTF-8"},
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+print()
+print("Kurulum ön ayarları:")
+print(f"  Profil     : {profile}")
+print(f"  Saat dilimi: {config['timezone']}   Klavye: {kb}   Dil: en_US.UTF-8")
+print(f"  Paketler   : {', '.join(packages)}")
+print(f"  Servisler  : {', '.join(services) or '-'}")
+print(f"  limon      : {extras or 'kurulmayacak'}")
+print(f"  (ayrıntı: {path})")
+PY
 
 echo
 read -rp "archinstall'ı başlatmak için INSTALL yaz: " answer
@@ -144,6 +279,12 @@ if [[ "$answer" != "INSTALL" ]]; then
   echo "İptal edildi."
   rm -f "$cfg"
   exit 0
+fi
+
+echo
+if ! prepare_pacman; then
+  rm -f "$cfg"
+  exit 1
 fi
 
 exec archinstall --config "$cfg"

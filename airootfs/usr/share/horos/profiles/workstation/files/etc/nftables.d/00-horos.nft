@@ -1,0 +1,4 @@
+# HorOS workstation: dışarıdan gelen hiçbir port açık değil (SSH dahil).
+# SSH sunucusunu bilerek açmak istersen:
+#   systemctl enable --now sshd
+#   ve bu dosyaya şunu ekle:  add element inet horos tcp_in { 22 }

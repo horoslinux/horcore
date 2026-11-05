@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# HorOS Linux — kurulum menüsü
+# Not: bilinçli olarak "set -e" yok; bir alt komut hata verirse menü kapanmasın.
+set -uo pipefail
+
+PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
+
+show_banner() {
+  clear
+  cat <<'BANNER'
+ _   _            ___  ____
+| | | | ___  _ __/ _ \/ ___|
+| |_| |/ _ \| '__| | | \___ \
+|  _  | (_) | |  | |_| |___) |
+|_| |_|\___/|_|   \___/|____/
+
+          HorOS Linux
+BANNER
+}
+
+load_profiles() {
+  profiles=()
+  [[ -d "$PROFILE_DIR" ]] || return 0
+  local d name
+  for d in "$PROFILE_DIR"/*/; do
+    d="${d%/}"; name="${d##*/}"
+    [[ "$name" == common ]] && continue
+    [[ -d "$d" ]] && profiles+=("$name")
+  done
+}
+
+profile_title() {
+  local f="$PROFILE_DIR/$1/title"
+  if [[ -f "$f" ]]; then head -n1 "$f"; else echo "$1"; fi
+}
+
+while true; do
+  show_banner
+  load_profiles
+  echo
+  n=0
+  for p in "${profiles[@]}"; do
+    n=$((n + 1))
+    printf '%d) Diske kur: %s\n' "$n" "$(profile_title "$p")"
+  done
+  net=$((n + 1)); reb=$((n + 2)); off=$((n + 3))
+  echo "$net) Ağ ayarları (Wi-Fi / kablolu)"
+  echo "$reb) Yeniden başlat"
+  echo "$off) Kapat"
+  echo
+  read -rp "Seçim [1-$off]: " choice || { sleep 1; continue; }
+
+  if [[ "$choice" == "shell" ]]; then      # gizli kurtarma kapısı (menüde gösterilmez)
+    exec bash
+  elif [[ "$choice" =~ ^[0-9]+$ ]] && (( 10#$choice >= 1 && 10#$choice <= n )); then
+    /usr/local/bin/horos-installer "${profiles[10#$choice-1]}"
+    echo; read -rp "Devam etmek için Enter'a bas..." _ || true
+  elif [[ "$choice" == "$net" ]]; then
+    nmtui || true
+  elif [[ "$choice" == "$reb" ]]; then
+    systemctl reboot
+  elif [[ "$choice" == "$off" ]]; then
+    systemctl poweroff
+  else
+    echo "Geçersiz seçim"; sleep 1
+  fi
+done
