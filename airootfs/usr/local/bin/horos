@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# HorOS Linux — kurulum menüsü
-# Not: bilinçli olarak "set -e" yok; bir alt komut hata verirse menü kapanmasın.
+# HorOS Linux — açılışta doğrudan kurulum (menü yok)
+# Not: bilinçli olarak "set -e" yok; bir adım hata verirse kurulum ekranı kapanmasın.
 set -uo pipefail
-
-PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
 
 show_banner() {
   clear
@@ -16,52 +14,47 @@ show_banner() {
 
           HorOS Linux
 BANNER
+  echo
 }
 
-load_profiles() {
-  profiles=()
-  [[ -d "$PROFILE_DIR" ]] || return 0
-  local d name
-  for d in "$PROFILE_DIR"/*/; do
-    d="${d%/}"; name="${d##*/}"
-    [[ "$name" == common ]] && continue
-    [[ -d "$d" ]] && profiles+=("$name")
+have_net() { ping -c1 -W3 archlinux.org &>/dev/null; }
+
+# 1) Ağ: bağlantı yoksa Wi-Fi/kablolu ayarını otomatik aç
+ensure_network() {
+  local i
+  for i in 1 2 3 4 5; do   # DHCP'nin gelmesi için kısa bekleme
+    have_net && return 0
+    sleep 1
   done
-}
-
-profile_title() {
-  local f="$PROFILE_DIR/$1/title"
-  if [[ -f "$f" ]]; then head -n1 "$f"; else echo "$1"; fi
+  echo "İnternet bağlantısı yok. Ağ ayarı açılıyor (Wi-Fi için)..."
+  sleep 1
+  nmtui || true
 }
 
 while true; do
   show_banner
-  load_profiles
-  echo
-  n=0
-  for p in "${profiles[@]}"; do
-    n=$((n + 1))
-    printf '%d) Diske kur: %s\n' "$n" "$(profile_title "$p")"
-  done
-  net=$((n + 1)); reb=$((n + 2)); off=$((n + 3))
-  echo "$net) Ağ ayarları (Wi-Fi / kablolu)"
-  echo "$reb) Yeniden başlat"
-  echo "$off) Kapat"
-  echo
-  read -rp "Seçim [1-$off]: " choice || { sleep 1; continue; }
+  ensure_network
 
-  if [[ "$choice" == "shell" ]]; then      # gizli kurtarma kapısı (menüde gösterilmez)
-    exec bash
-  elif [[ "$choice" =~ ^[0-9]+$ ]] && (( 10#$choice >= 1 && 10#$choice <= n )); then
-    /usr/local/bin/horos-installer "${profiles[10#$choice-1]}"
-    echo; read -rp "Devam etmek için Enter'a bas..." _ || true
-  elif [[ "$choice" == "$net" ]]; then
-    nmtui || true
-  elif [[ "$choice" == "$reb" ]]; then
-    systemctl reboot
-  elif [[ "$choice" == "$off" ]]; then
-    systemctl poweroff
+  # 2) Kurulum: profil seçimi -> ön ayarlar -> archinstall
+  /usr/local/bin/horos-installer
+  rc=$?
+
+  # 3) Bitti / iptal / hata: kısa sonuç menüsü
+  echo
+  if (( rc == 0 )); then
+    echo "Kurulum tamamlandı. USB/ISO'yu çıkarıp yeniden başlat."
+  elif (( rc == 130 )); then
+    echo "Kurulum iptal edildi."
   else
-    echo "Geçersiz seçim"; sleep 1
+    echo "Kurulum tamamlanmadı (kod: $rc)."
   fi
+  echo "  [Enter] Yeniden başlat   [t] Tekrar dene   [n] Ağ   [k] Kapat   [s] Kabuk"
+  read -rp "> " a || { sleep 1; continue; }
+  case "${a,,}" in
+    ""|r) systemctl reboot ;;
+    t)    continue ;;
+    n)    nmtui || true ;;
+    k)    systemctl poweroff ;;
+    s|shell) exec bash ;;
+  esac
 done

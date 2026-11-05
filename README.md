@@ -34,22 +34,42 @@ UEFI=1 ./test-qemu.sh     # UEFI (requires edk2-ovmf)
 
 ## Live ISO
 
-The ISO is for installation only. On tty1, root is logged in automatically and the `horos` menu opens.
-The system is already running live at that point, so there is no "live" entry. The menu lists:
+The ISO boots straight into the installer, like Fedora/Ubuntu: on tty1 root is logged in automatically and `horos` starts the install flow with no menu.
 
-1. Install to disk, one entry per profile (Server, Workstation)
-2. Network settings (`nmtui`, for Wi-Fi)
-3. Reboot
-4. Power off
+1. Network check (opens `nmtui` only if there is no connection)
+2. Keyboard layout is confirmed first (a wrong layout would break the password you type)
+3. A Fedora-style **Installation Summary** screen shows every setting with its current value; pick a number to change it:
 
-- For a recovery shell, type `shell` at the menu prompt (it is not shown), or log in with `HOROS_NO_MENU=1`.
+| # | Item | Default |
+| --- | --- | --- |
+| 1 | Keyboard | suggested from the public IP country |
+| 2 | Time zone | detected from the IP, UTC if it fails |
+| 3 | Installation profile | Server / Workstation |
+| 4 | Desktop environment (Workstation only) | not installed; asks KDE Plasma or GNOME when Workstation is selected |
+| 5 | AI assistant (limon) | not installed |
+| 6 | Installation destination | **required**; the whole disk is erased, the live medium is hidden |
+| 7 | Network and host name | `horos` |
+| 8 | Root account | locked (or set a password) |
+| 9 | Create user | **required** unless root has a password; admin (sudo) by default |
+
+4. `b` starts the installation: type `INSTALL` to confirm, then `archinstall --silent` runs
+5. When it ends: Enter reboots; `t` retry, `n` network, `k` power off, `s` shell
+
+- For a recovery shell, press `s` at the end prompt, or log in with `HOROS_NO_MENU=1`.
+- `HOROS_DRYRUN=1 horos-installer` writes the archinstall config and stops without touching any disk.
 - The Live ISO is not persistent storage; changes are lost after reboot.
 
 ## Installation to Disk
 
-Choosing a profile in the menu starts `archinstall` with HorOS presets. You choose the disk, users and network
-interactively inside `archinstall`. Select the target disk carefully; the wrong disk can cause data loss.
-`archinstall` is the upstream tool, so its screens are not written by HorOS and the installed system's `os-release` currently appears as Arch.
+HorOS has its own front end; `archinstall` is the backend. The installer builds one `archinstall` JSON config
+(disk layout, hostname, packages, time zone, locale) and passes it with `--config --silent`.
+Users, passwords, the firewall and services are set up through `custom_commands` on the installed system.
+`archinstall` is the upstream tool and the installed system's `os-release` currently appears as Arch.
+
+- **Disk layout:** whole disk. UEFI: GPT, 512 MiB ESP at `/boot` + ext4 `/`. BIOS: MBR, 1 GiB FAT32 `/boot` + ext4 `/`. No swap, no encryption.
+- **Bootloader:** left to the `archinstall` default (systemd-boot on UEFI, GRUB on BIOS).
+- **Network:** NetworkManager is installed and enabled; connections made in the live session (including Wi-Fi) are copied over.
+- **Time:** `systemd-timesyncd` is enabled.
 
 ### Profiles
 
@@ -70,6 +90,19 @@ A profile folder contains:
 `common/` applies to every profile: packages `nano`, `nftables`, `openssh` and the firewall.
 To add a profile, create a new folder with these files; no installer code needs to change.
 
+### Desktop environment
+
+When the **Workstation** profile is selected, the installer asks whether to also install a desktop:
+
+| Choice | Packages | Enabled display manager |
+| --- | --- | --- |
+| No desktop | terminal only | — |
+| KDE Plasma | `plasma-meta`, `plasma-login-manager`, `mesa`, `noto-fonts` | `plasmalogin` |
+| GNOME | `gnome`, `gnome-tweaks`, `gdm`, `mesa`, `noto-fonts` | `gdm` |
+
+Both choices also install PipeWire (`pipewire`, `pipewire-pulse`, `wireplumber`) for audio.
+The choice can be changed later from item 4 in the summary (it only applies to Workstation; Server ignores it).
+
 ### Firewall
 
 All profiles get `nftables` with inbound traffic denied by default (loopback, established connections, ICMP and DHCP replies are allowed).
@@ -87,7 +120,7 @@ During installation the rules are syntax-checked with `nft -c`, and a warning is
 - **Package database:** before `archinstall` starts, the installer waits for the keyring and mirror services, syncs the clock, runs `pacman -Sy`,
   and on failure retries after refreshing the keyring or switching to a fixed mirror. If it still fails it prints the real error instead of starting `archinstall`.
 
-The answers are written to a partial `archinstall` JSON config (`hostname`, `packages`, `custom_commands`, `timezone`, `locale_config`) passed with `--config`.
+The answers are written to an `archinstall` JSON config (`hostname`, `packages`, `custom_commands`, `timezone`, `locale_config`, `disk_config`) passed with `--config --silent`.
 
 ## Boot screen
 

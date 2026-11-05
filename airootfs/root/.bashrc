@@ -4,4 +4,4 @@ alias ll='ls -lah'
 [[ $- == *i* ]] || return
 PS1='\[\e[1;33m\]horos\[\e[0m\]:\w\$ '
 printf '\nHorOS Linux | terminal-first Arch tabanlı ortam\n'
-printf 'Menü için: horos\n\n'
+printf 'Kurulum için: horos\n\n'

@@ -1,34 +1,343 @@
 #!/usr/bin/env bash
-# HorOS Linux — diske kurulum (archinstall tabanlı, sunucu ön ayarlı)
-set -euo pipefail
+# HorOS Linux — kurulum arayüzü
+# Fedora (Anaconda) tarzı "Kurulum Özeti" ekranı; arka uçta archinstall --silent çalışır.
+# Test için: HOROS_DRYRUN=1 horos-installer  (yapılandırmayı yazar, diske dokunmaz)
+set -uo pipefail
+export LC_ALL=C.UTF-8   # ${#var} karakter saysın (Türkçe harflerle hizalama)
 
 LIMON_URL="https://horoslinux.github.io/limon/install.sh"
 PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
-profile="${1:-}"
+KEYMAP_DIR="${KEYMAP_DIR:-/usr/share/kbd/keymaps}"
+DRYRUN="${HOROS_DRYRUN:-}"
 
-if [[ $EUID -ne 0 ]]; then
-  echo "Kurulum aracı root olarak çalıştırılmalı."
-  exit 1
-fi
+Y=$'\e[1;33m'; R=$'\e[1;31m'; G=$'\e[1;32m'; D=$'\e[2m'; N=$'\e[0m'
 
-if ! command -v archinstall >/dev/null; then
-  echo "archinstall bulunamadı." >&2
-  exit 1
-fi
+# ---- Durum (özet ekranındaki her satır bir değişken) ----
+kb=us; timezone=UTC; tz_src="varsayılan"; country=""
+profile=""; extras=""; desktop=""
+disk=""; disk_bytes=0; disk_sec=512
+hostname_v="horos"; net_state="bilinmiyor"
+root_hash=""; username=""; user_hash=""; user_admin=1
+PW_HASH=""
 
-cat <<'INFO'
-HorOS Linux Installer
+# ---------------------------------------------------------------- yardımcılar
+have_net() { ping -c1 -W3 archlinux.org &>/dev/null; }
 
-Bu araç archinstall'ın etkileşimli kurulum arayüzünü açar.
-Sistem olabildiğince boş kurulur (masaüstü yok, ek paket yok);
-disk, kullanıcı, ağ ve dil seçimlerini archinstall içinde sen yaparsın.
-Internet bağlantısı gerekir (kablolu bağlantı otomatik kurulur;
-Wi-Fi için: nmtui).
-Disk bölümleme sırasında seçtiğin hedef diskteki veriler silinebilir.
-Devam etmeden önce yedek al.
-INFO
+ip_lookup() { # $1: alan (timezone | country)
+  local url val
+  for url in "https://ipapi.co/$1" "https://ipinfo.io/$1"; do
+    val="$(curl -fsS --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')" || continue
+    if [[ "$val" =~ ^[A-Za-z0-9_+/-]+$ ]]; then echo "$val"; return 0; fi
+  done
+  return 1
+}
 
-# --- Kurulum öncesi hazırlık: archinstall'ın "pacman -Sy" adımı bunlara bağlı ---
+keymap_for_country() {
+  case "$1" in
+    TR) echo trq ;;       US) echo us ;;         GB) echo uk ;;
+    DE|AT) echo de-latin1 ;;  FR) echo fr ;;     ES) echo es ;;
+    IT) echo it ;;        PT) echo pt-latin1 ;;  BR) echo br-abnt2 ;;
+    NL) echo nl ;;        BE) echo be-latin1 ;;  CH) echo sg-latin1 ;;
+    SE) echo sv-latin1 ;; NO) echo no ;;         DK) echo dk ;;
+    FI) echo fi ;;        PL) echo pl ;;         CZ) echo cz-lat2 ;;
+    RU) echo ru ;;        UA) echo ua ;;         GR) echo gr ;;
+    HU) echo hu ;;        RO) echo ro ;;         IE) echo ie ;;
+    JP) echo jp106 ;;
+    *) echo us ;;
+  esac
+}
+
+keymap_exists() {
+  [[ -d "$KEYMAP_DIR" ]] || return 0   # doğrulanamıyorsa engelleme
+  find "$KEYMAP_DIR" -type f \( -name "$1.map" -o -name "$1.map.gz" \) 2>/dev/null | grep -q .
+}
+
+profile_title() {
+  local f="$PROFILE_DIR/$1/title"
+  if [[ -f "$f" ]]; then head -n1 "$f"; else echo "$1"; fi
+}
+
+profile_short() { profile_title "$1" | sed 's/ —.*//'; }
+
+limon_label() {
+  case "$extras" in
+    "") echo "Kurulmayacak" ;;
+    all) echo "Kurulacak (Claude, OpenAI, Gemini)" ;;
+    *) echo "Kurulacak ($extras)" ;;
+  esac
+}
+
+desktop_label() {
+  if [[ "$profile" != workstation ]]; then
+    echo "— (yalnızca Workstation)"
+    return
+  fi
+  case "$desktop" in
+    kde) echo "KDE Plasma" ;;
+    gnome) echo "GNOME" ;;
+    *) echo "Kurulmayacak" ;;
+  esac
+}
+
+pause() { sleep "${1:-1}"; }
+
+# ---------------------------------------------------------------- bölümler
+set_keyboard() {
+  local in k
+  echo
+  echo "Parolanı bu düzenle yazacaksın; doğru düzeni seçtiğinden emin ol."
+  while true; do
+    read -rp "Klavye düzeni [$kb] (Enter = kabul; örn: us, trq, trf, uk, de-latin1): " in || in=""
+    k="${in:-$kb}"
+    if keymap_exists "$k"; then kb="$k"; break; fi
+    echo "'$k' bulunamadı. Tüm düzenler için: localectl list-keymaps"
+  done
+  loadkeys "$kb" 2>/dev/null || true   # parola girişleri için hemen uygula
+}
+
+set_timezone() {
+  local in z
+  echo
+  echo "Örnek: Europe/Istanbul, America/New_York, UTC (arama için bir parça yaz: ist)"
+  while true; do
+    read -rp "Saat dilimi [$timezone]: " in || in=""
+    z="${in:-$timezone}"
+    if [[ "$z" =~ ^[A-Za-z0-9_+/-]+$ && -f "/usr/share/zoneinfo/$z" ]]; then
+      timezone="$z"; tz_src="elle seçildi"; return 0
+    fi
+    echo "Bulunamadı. Eşleşenler:"
+    timedatectl list-timezones 2>/dev/null | grep -i -- "${z//[^A-Za-z0-9_+\/-]/}" | head -n 10 | sed 's/^/  /'
+  done
+}
+
+set_profile() {
+  local profiles=() p i pc
+  mapfile -t profiles < <(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort)
+  (( ${#profiles[@]} > 0 )) || { echo "Profil bulunamadı: $PROFILE_DIR"; pause 2; return 0; }
+  echo
+  i=0
+  for p in "${profiles[@]}"; do
+    i=$((i + 1)); printf '  %d) %s\n' "$i" "$(profile_title "$p")"
+  done
+  read -rp "Seçim [1-${#profiles[@]}]: " pc || return 0
+  if [[ "$pc" =~ ^[0-9]+$ ]] && (( 10#$pc >= 1 && 10#$pc <= ${#profiles[@]} )); then
+    profile="${profiles[10#$pc - 1]}"
+    if [[ "$profile" == workstation ]]; then
+      set_desktop
+    else
+      desktop=""
+    fi
+  else
+    echo "Geçersiz seçim."; pause
+  fi
+}
+
+set_desktop() {
+  local a
+  if [[ "$profile" != workstation ]]; then
+    echo
+    echo "Masaüstü ortamı yalnızca Workstation profilinde seçilir."
+    pause 2; return 0
+  fi
+  echo
+  echo "KDE Plasma veya GNOME kurulsun mu? (şu an: $(desktop_label))"
+  echo "  1) Kurma — yalnızca terminal"
+  echo "  2) KDE Plasma"
+  echo "  3) GNOME"
+  read -rp "Seçim [1-3]: " a || return 0
+  case "$a" in
+    1) desktop="" ;;
+    2) desktop=kde ;;
+    3) desktop=gnome ;;
+    *) echo "Geçersiz seçim."; pause ;;
+  esac
+}
+
+set_limon() {
+  local a
+  echo
+  echo "AI asistanı (limon). Yalnızca seçtiğin sağlayıcının SDK'sı kurulur."
+  echo "  1) Hayır"
+  echo "  2) Evet — Claude"
+  echo "  3) Evet — OpenAI"
+  echo "  4) Evet — Gemini"
+  echo "  5) Evet — hepsi"
+  read -rp "Seçim [1-5]: " a || return 0
+  case "$a" in
+    1) extras="" ;;
+    2) extras=claude ;;
+    3) extras=openai ;;
+    4) extras=gemini ;;
+    5) extras=all ;;
+    *) echo "Geçersiz seçim."; pause ;;
+  esac
+}
+
+# Disk listesi: yol<TAB>bayt<TAB>model<TAB>sektör  (kurulum ortamının kendi diski hariç)
+list_disks() {
+  local src live=""
+  src="$(findmnt -rno SOURCE /run/archiso/bootmnt 2>/dev/null || true)"
+  if [[ -n "$src" ]]; then
+    live="$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)"
+    [[ -n "$live" ]] && live="/dev/$live"
+  fi
+  LIVE_DEV="$live" python3 - <<'PY'
+import json, os, subprocess
+live = os.environ.get("LIVE_DEV", "")
+raw = subprocess.run(
+    ["lsblk", "-J", "-b", "-d", "-p", "-o", "NAME,SIZE,MODEL,TYPE,RO,LOG-SEC"],
+    capture_output=True, text=True).stdout
+for d in json.loads(raw or '{"blockdevices": []}')["blockdevices"]:
+    name = d.get("name") or ""
+    if d.get("type") != "disk" or name == live or name.startswith("/dev/zram"):
+        continue
+    if str(d.get("ro")).lower() in ("1", "true"):
+        continue
+    size = int(d.get("size") or 0)
+    sec = int(d.get("log-sec") or 512)
+    model = (d.get("model") or "disk").strip()
+    print(f"{name}\t{size}\t{model}\t{sec}")
+PY
+}
+
+human_size() { python3 -c "import sys;b=int(sys.argv[1]);print(f'{b/1e9:.0f} GB' if b<1e12 else f'{b/1e12:.1f} TB')" "$1"; }
+
+set_disk() {
+  local lines=() l i=0 pc name size model sec
+  mapfile -t lines < <(list_disks)
+  if (( ${#lines[@]} == 0 )); then
+    echo; echo "Kurulabilecek disk bulunamadı."; pause 2; return 0
+  fi
+  echo
+  echo "Kurulum hedefi — ${R}seçilen diskteki TÜM veriler silinir${N} (otomatik bölümleme)."
+  for l in "${lines[@]}"; do
+    i=$((i + 1))
+    IFS=$'\t' read -r name size model sec <<<"$l"
+    printf '  %d) %s  %s  %s\n' "$i" "$name" "$(human_size "$size")" "$model"
+  done
+  read -rp "Seçim [1-${#lines[@]}]: " pc || return 0
+  if [[ "$pc" =~ ^[0-9]+$ ]] && (( 10#$pc >= 1 && 10#$pc <= ${#lines[@]} )); then
+    IFS=$'\t' read -r name size model sec <<<"${lines[10#$pc - 1]}"
+    if (( size < 8 * 1024 * 1024 * 1024 )); then
+      echo "Disk çok küçük (en az 8 GB gerekir)."; pause 2; return 0
+    fi
+    disk="$name"; disk_bytes="$size"; disk_sec="$sec"
+  else
+    echo "Geçersiz seçim."; pause
+  fi
+}
+
+set_network() {
+  local in h
+  echo
+  if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
+  echo "Ağ durumu: $net_state"
+  read -rp "Ağ ayarlarını aç (nmtui, Wi-Fi için)? [e/H]: " in || in=""
+  if [[ "${in,,}" == e* ]]; then
+    nmtui || true
+    if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
+  fi
+  while true; do
+    read -rp "Ana makine adı [$hostname_v]: " in || in=""
+    h="${in:-$hostname_v}"
+    if [[ "$h" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then hostname_v="$h"; break; fi
+    echo "Geçersiz ad (küçük harf, rakam ve '-' kullan)."
+  done
+}
+
+# Parolayı iki kez sorar; yescrypt/sha512 özetini PW_HASH'e yazar. Boş giriş = vazgeç.
+ask_password() { # $1: etiket
+  local p1 p2
+  while true; do
+    read -rsp "Parola ($1; en az 8 karakter, boş = vazgeç): " p1 || return 1; echo
+    [[ -z "$p1" ]] && return 1
+    if (( ${#p1} < 8 )); then echo "En az 8 karakter olmalı."; continue; fi
+    read -rsp "Parolayı tekrar yaz: " p2 || return 1; echo
+    [[ "$p1" == "$p2" ]] && break
+    echo "Parolalar eşleşmiyor."
+  done
+  PW_HASH="$(printf '%s' "$p1" | openssl passwd -6 -stdin)" || return 1
+  [[ "$PW_HASH" == '$6$'* ]]
+}
+
+set_root() {
+  local a
+  echo
+  echo "Root hesabı:"
+  echo "  1) Kilitli (önerilen) — yönetim için sudo'lu kullanıcı kullanılır"
+  echo "  2) Root parolası belirle"
+  read -rp "Seçim [1-2]: " a || return 0
+  case "$a" in
+    1) root_hash="" ;;
+    2) if ask_password "root"; then root_hash="$PW_HASH"; else echo "Vazgeçildi."; pause; fi ;;
+    *) echo "Geçersiz seçim."; pause ;;
+  esac
+}
+
+set_user() {
+  local u a
+  echo
+  read -rp "Kullanıcı adı [boş = vazgeç]: " u || return 0
+  [[ -z "$u" ]] && return 0
+  if [[ ! "$u" =~ ^[a-z_][a-z0-9_-]{0,31}$ || "$u" == root ]]; then
+    echo "Geçersiz kullanıcı adı (küçük harf, rakam, '_' ve '-')."; pause 2; return 0
+  fi
+  ask_password "kullanıcı $u" || { echo "Vazgeçildi."; pause; return 0; }
+  read -rp "Yönetici (sudo) olsun mu? [E/h]: " a || a=""
+  username="$u"; user_hash="$PW_HASH"
+  if [[ "${a,,}" == h* ]]; then user_admin=0; else user_admin=1; fi
+}
+
+# ---------------------------------------------------------------- özet ekranı
+show_banner() {
+  clear
+  cat <<'BANNER'
+ _   _            ___  ____
+| | | | ___  _ __/ _ \/ ___|
+| |_| |/ _ \| '__| | | \___ \
+|  _  | (_) | |  | |_| |___) |
+|_| |_|\___/|_|   \___/|____/
+BANNER
+  echo
+}
+
+row() { # $1 numara, $2 etiket, $3 değer, $4 uyarı (varsa)
+  printf ' %s) %s%*s %s%s\n' "$1" "$2" $((26 - ${#2})) "" "$3" "${4:+  ${R}$4${N}}"
+}
+
+admin_ok() { [[ -n "$root_hash" ]] || { [[ -n "$username" ]] && (( user_admin == 1 )); }; }
+
+show_hub() {
+  local disk_v user_v root_v warn_d="" warn_u=""
+  if [[ -n "$disk" ]]; then disk_v="$disk ($(human_size "$disk_bytes")) — otomatik bölümleme"
+  else disk_v="seçilmedi"; warn_d="(!) tamamlanmalı"; fi
+  if [[ -n "$username" ]]; then user_v="$username$( ((user_admin)) && echo ' (yönetici)' )"
+  else user_v="oluşturulmadı"; fi
+  admin_ok || warn_u="(!) yönetici hesap gerekli"
+  if [[ -n "$root_hash" ]]; then root_v="Parola belirlendi"; else root_v="Kilitli"; fi
+
+  show_banner
+  echo "${Y}KURULUM ÖZETİ${N}"
+  echo
+  echo "${Y}YEREL AYARLAR${N}"
+  row 1 "Klavye"               "$kb"
+  row 2 "Saat dilimi"          "$timezone ${D}($tz_src)${N}"
+  echo "${Y}YAZILIM${N}"
+  row 3 "Kurulum profili"      "$(profile_short "$profile")"
+  row 4 "Masaüstü ortamı"      "$(desktop_label)"
+  row 5 "AI asistanı (limon)"  "$(limon_label)"
+  echo "${Y}SİSTEM${N}"
+  row 6 "Kurulum hedefi"       "$disk_v" "$warn_d"
+  row 7 "Ağ ve makine adı"     "$net_state · $hostname_v"
+  echo "${Y}KULLANICI AYARLARI${N}"
+  row 8 "Root hesabı"          "$root_v"
+  row 9 "Kullanıcı oluştur"    "$user_v" "$warn_u"
+  echo
+  echo " ${G}b${N}) Kurulumu başlat      ${D}q) Vazgeç${N}"
+  echo
+}
+
+# ---------------------------------------------------------------- kurulum hazırlığı
 wait_unit() { # $1 unit, $2 mesaj, $3 en fazla saniye
   local unit="$1" msg="$2" max="${3:-90}" i=0 st
   while (( i < max )); do
@@ -44,7 +353,6 @@ prepare_pacman() {
   wait_unit pacman-init.service "Pacman anahtar deposu hazırlanıyor..." 120
   wait_unit reflector.service   "Mirror listesi güncelleniyor..." 90
 
-  # Saat yanlışsa HTTPS sertifikaları reddedilir
   if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" != yes ]]; then
     echo "Saat eşitleniyor..."
     timedatectl set-ntp true 2>/dev/null || true
@@ -74,140 +382,37 @@ prepare_pacman() {
 
   if out="$(pacman -Sy 2>&1)"; then return 0; fi
   echo >&2
-  echo "HATA: Paket veritabanı eşitlenemedi. archinstall bu yüzden başlayamaz." >&2
+  echo "HATA: Paket veritabanı eşitlenemedi. Kurulum bu yüzden başlayamaz." >&2
   tail -n 8 <<<"$out" | sed 's/^/  /' >&2
   echo >&2
   echo "Kontrol et: 'systemctl status pacman-init reflector', 'timedatectl', 'ping archlinux.org'" >&2
   return 1
 }
 
-if ! ping -c1 -W3 archlinux.org &>/dev/null; then
-  echo
-  echo "UYARI: İnternet bağlantısı görünmüyor. Kurulum için önce 'nmtui' ile bağlan."
-fi
+# ---------------------------------------------------------------- archinstall yapılandırması
+# Disk düzeni, saat dilimi, dil ve ana makine adı archinstall'a verilir; kullanıcı, parola, güvenlik
+# duvarı ve servisler custom_commands ile kurulan sistemde yapılır (archinstall sürümleri arasında
+# şeması en kararlı olan yol).
+generate_config() { # $1: çıktı dosyası
+  local efi=0 wifi=0
+  [[ -d /sys/firmware/efi ]] && efi=1
+  [[ -n "${HOROS_EFI:-}" ]] && efi="$HOROS_EFI"   # yalnızca test için
+  compgen -G '/sys/class/net/*/wireless' >/dev/null && wifi=1
 
-# --- Konum tespiti (IP'den): saat dilimi ve ülke ---
-KEYMAP_DIR="${KEYMAP_DIR:-/usr/share/kbd/keymaps}"
+  H_PROFILE="$profile" H_PDIR="$PROFILE_DIR" H_EXTRAS="$extras" H_URL="$LIMON_URL" \
+  H_DESKTOP="$desktop" \
+  H_TZ="$timezone" H_KB="$kb" H_HOST="$hostname_v" H_DISK="$disk" H_BYTES="$disk_bytes" \
+  H_SEC="$disk_sec" H_EFI="$efi" H_WIFI="$wifi" H_USER="$username" H_USERHASH="$user_hash" \
+  H_ADMIN="$user_admin" H_ROOTHASH="$root_hash" \
+  python3 - "$1" <<'PY'
+import base64, glob, json, os, shlex, sys, uuid
 
-ip_lookup() { # $1: alan (timezone | country)
-  local url val
-  for url in "https://ipapi.co/$1" "https://ipinfo.io/$1"; do
-    val="$(curl -fsS --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')" || continue
-    if [[ "$val" =~ ^[A-Za-z0-9_+/-]+$ ]]; then
-      echo "$val"
-      return 0
-    fi
-  done
-  return 1
-}
-
-timezone="$(ip_lookup timezone || true)"
-[[ -n "$timezone" && -f "/usr/share/zoneinfo/$timezone" ]] || timezone=""
-tz_src="IP'den tespit edildi"
-if [[ -z "$timezone" ]]; then
-  timezone="UTC"
-  tz_src="tespit edilemedi, varsayılan"
-fi
-country="$(ip_lookup country || true)"
-[[ "$country" =~ ^[A-Z]{2}$ ]] || country=""
-
-keymap_for_country() {
-  case "$1" in
-    TR) echo trq ;;       US) echo us ;;         GB) echo uk ;;
-    DE|AT) echo de-latin1 ;;  FR) echo fr ;;     ES) echo es ;;
-    IT) echo it ;;        PT) echo pt-latin1 ;;  BR) echo br-abnt2 ;;
-    NL) echo nl ;;        BE) echo be-latin1 ;;  CH) echo sg-latin1 ;;
-    SE) echo sv-latin1 ;; NO) echo no ;;         DK) echo dk ;;
-    FI) echo fi ;;        PL) echo pl ;;         CZ) echo cz-lat2 ;;
-    RU) echo ru ;;        UA) echo ua ;;         GR) echo gr ;;
-    HU) echo hu ;;        RO) echo ro ;;         IE) echo ie ;;
-    JP) echo jp106 ;;
-    *) echo us ;;
-  esac
-}
-
-keymap_exists() {
-  [[ -d "$KEYMAP_DIR" ]] || return 0   # doğrulanamıyorsa engelleme
-  find "$KEYMAP_DIR" -type f \( -name "$1.map" -o -name "$1.map.gz" \) 2>/dev/null | grep -q .
-}
-
-# --- Klavye düzeni: öner, kullanıcıdan onay al (yanlış düzen parola girişini bozar) ---
-kb_default="$(keymap_for_country "$country")"
-keymap_exists "$kb_default" || kb_default=us
-echo
-if [[ -n "$country" ]]; then
-  echo "Tespit edilen ülke: $country"
-fi
-echo "Saat dilimi: $timezone ($tz_src); sistem dili: en_US.UTF-8"
-echo "Parolanı bu düzenle yazacaksın; doğru düzeni seçtiğinden emin ol."
-while true; do
-  read -rp "Klavye düzeni [$kb_default] (Enter = kabul; başka için adını yaz: us, trq, trf, uk, de-latin1...): " kb_in || kb_in=""
-  kb="${kb_in:-$kb_default}"
-  if keymap_exists "$kb"; then break; fi
-  echo "'$kb' bulunamadı. Tüm düzenler için: localectl list-keymaps"
-done
-loadkeys "$kb" 2>/dev/null || true   # bu oturumda hemen uygula (parola girişleri için)
-
-# --- Profil (profiles/ dizinindeki her klasör bir profildir) ---
-mapfile -t profiles < <(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort)
-if (( ${#profiles[@]} == 0 )); then
-  echo "Profil dizini bulunamadı: $PROFILE_DIR" >&2
-  exit 1
-fi
-
-profile_title() {
-  local f="$PROFILE_DIR/$1/title"
-  if [[ -f "$f" ]]; then head -n1 "$f"; else echo "$1"; fi
-}
-
-if [[ -n "$profile" ]]; then
-  if [[ "$profile" == common || ! -d "$PROFILE_DIR/$profile" ]]; then
-    echo "Bilinmeyen profil: $profile (mevcut: ${profiles[*]})" >&2
-    exit 1
-  fi
-else
-  echo
-  echo "Kurulum profili:"
-  i=0
-  for p in "${profiles[@]}"; do
-    i=$((i + 1))
-    printf '  %d) %s\n' "$i" "$(profile_title "$p")"
-  done
-  while true; do
-    read -rp "Seçim [1-${#profiles[@]}, varsayılan 1]: " pc || pc=""
-    pc="${pc:-1}"
-    if [[ "$pc" =~ ^[0-9]+$ ]] && (( 10#$pc >= 1 && 10#$pc <= ${#profiles[@]} )); then
-      profile="${profiles[10#$pc - 1]}"
-      break
-    fi
-    echo "Geçersiz seçim."
-  done
-fi
-echo
-echo "Profil: $(profile_title "$profile")"
-
-echo
-echo "AI asistanı (limon) kurulsun mu? Yalnızca seçtiğin sağlayıcının SDK'sı kurulur."
-echo "  1) Hayır"
-echo "  2) Evet — Claude"
-echo "  3) Evet — OpenAI"
-echo "  4) Evet — Gemini"
-echo "  5) Evet — hepsi"
-read -rp "Seçim [1-5, varsayılan 1]: " limon_ans || limon_ans=""
-case "${limon_ans:-1}" in
-  2) extras=claude ;;
-  3) extras=openai ;;
-  4) extras=gemini ;;
-  5) extras=all ;;
-  *) extras="" ;;
-esac
-
-# --- archinstall için kısmi yapılandırma (diğer menüler interaktif kalır) ---
-cfg="$(mktemp --suffix=.json /tmp/horos-archinstall.XXXXXX)"
-python3 - "$cfg" "$profile" "$extras" "$LIMON_URL" "$timezone" "$kb" "$PROFILE_DIR" <<'PY'
-import base64, json, os, sys
-
-path, profile, extras, url, timezone, kb, pdir = sys.argv[1:8]
+E = os.environ
+out = sys.argv[1]
+profile, pdir, extras, url = E["H_PROFILE"], E["H_PDIR"], E["H_EXTRAS"], E["H_URL"]
+desktop = E["H_DESKTOP"]
+username, user_hash, admin = E["H_USER"], E["H_USERHASH"], E["H_ADMIN"] == "1"
+root_hash = E["H_ROOTHASH"]
 
 
 def read_list(p):
@@ -217,6 +422,16 @@ def read_list(p):
         return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
 
 
+def write_cmd(src, dest, mode=None):
+    with open(src, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    d = shlex.quote(dest)
+    cmd = f"mkdir -p {shlex.quote(os.path.dirname(dest))} && echo {b64} | base64 -d > {d}"
+    if mode:
+        cmd += f" && chmod {mode} {d}"
+    return cmd
+
+
 def file_commands(root):
     """<profil>/files/<yol> içindeki her dosyayı hedef sistemde /<yol> olarak yazar."""
     base = os.path.join(root, "files")
@@ -224,10 +439,7 @@ def file_commands(root):
     for dirpath, _, names in sorted(os.walk(base)):
         for name in sorted(names):
             src = os.path.join(dirpath, name)
-            dest = "/" + os.path.relpath(src, base)
-            with open(src, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            cmds.append(f"mkdir -p {os.path.dirname(dest)} && echo {b64} | base64 -d > {dest}")
+            cmds.append(write_cmd(src, "/" + os.path.relpath(src, base)))
     return cmds
 
 
@@ -238,11 +450,45 @@ for part in ("common", profile):
     services += read_list(os.path.join(root, "services"))
     commands += file_commands(root)
 
+if E["H_WIFI"] == "1":
+    packages.append("wpa_supplicant")
+
+# Masaüstü ortamı — yalnızca Workstation profilinde sorulur.
+# Ortak ses/görüntü paketleri: PipeWire ve Mesa.
+if desktop == "kde":
+    packages += ["plasma-meta", "plasma-login-manager", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts"]
+    services += ["plasmalogin"]
+elif desktop == "gnome":
+    packages += ["gnome", "gnome-tweaks", "gdm", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts"]
+    services += ["gdm"]
+
+# Canlı ortamda kurulan ağ bağlantıları (Wi-Fi parolası dahil) hedef sisteme taşınır.
+for src in sorted(glob.glob("/etc/NetworkManager/system-connections/*")):
+    if os.path.isfile(src):
+        commands.append(write_cmd(src, "/etc/NetworkManager/system-connections/" + os.path.basename(src), "600"))
+
 if "nftables" in packages:
     commands.append(
         "nft -c -f /etc/nftables.conf "
         "|| echo 'HorOS: UYARI: guvenlik duvari kurallari dogrulanamadi, /etc/nftables.conf dosyasini kontrol et'"
     )
+
+# Hesaplar
+if username:
+    grp = "-G wheel " if admin else ""
+    commands.append(f"useradd -m {grp}-s /bin/bash {username}")
+    commands.append(f"echo '{username}:{user_hash}' | chpasswd -e")
+    if admin:
+        packages.append("sudo")
+        commands.append(
+            "echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel "
+            "&& chmod 440 /etc/sudoers.d/10-wheel"
+        )
+if root_hash:
+    commands.append(f"echo 'root:{root_hash}' | chpasswd -e")
+else:
+    commands.append("passwd -l root")
+
 commands += [f"systemctl enable {s}" for s in services]
 
 if extras:
@@ -252,39 +498,159 @@ if extras:
         f"|| echo 'HorOS: limon kurulamadi. Sonra elle kur: curl -fsSL {url} | bash'"
     )
 
-packages = list(dict.fromkeys(packages))
+# Disk düzeni: UEFI'de GPT (ESP + ext4 kök), BIOS'ta MBR (FAT32 /boot + ext4 kök).
+# Tüm disk silinir. archinstall oluşturulan her bölüm için bir dosya sistemi ister;
+# BIOS'ta disk şeması MBR olduğundan bios_grub bölümü kullanılmaz.
+sec = int(E["H_SEC"])
+total_mib = int(E["H_BYTES"]) // (1024 * 1024)
+efi = E["H_EFI"] == "1"
+
+
+def size_of(mib):
+    return {"sector_size": {"unit": "B", "value": sec}, "unit": "MiB", "value": mib}
+
+
+def part(start, size, fs, flags, mount):
+    return {
+        "btrfs": [], "dev_path": None, "flags": flags, "fs_type": fs, "mount_options": [],
+        "mountpoint": mount, "obj_id": str(uuid.uuid4()), "size": size_of(size),
+        "start": size_of(start), "status": "create", "type": "primary",
+    }
+
+
+if efi:
+    parts = [part(1, 512, "fat32", ["boot", "esp"], "/boot"),
+             part(513, total_mib - 513 - 1, "ext4", [], "/")]
+else:
+    parts = [part(1, 1024, "fat32", ["boot"], "/boot"),
+             part(1025, total_mib - 1025 - 1, "ext4", [], "/")]
+
 config = {
-    "hostname": "horos",
-    "packages": packages,
+    "hostname": E["H_HOST"],
+    "packages": list(dict.fromkeys(packages)),
     "custom_commands": commands,
-    "timezone": timezone or "UTC",
-    "locale_config": {"kb_layout": kb, "sys_lang": "en_US", "sys_enc": "UTF-8"},
+    "timezone": E["H_TZ"] or "UTC",
+    "locale_config": {"kb_layout": E["H_KB"], "sys_lang": "en_US", "sys_enc": "UTF-8"},
+    "disk_config": {
+        "config_type": "default_layout",
+        "device_modifications": [{"device": E["H_DISK"], "partitions": parts, "wipe": True}],
+    },
 }
-with open(path, "w", encoding="utf-8") as f:
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
-
-print()
-print("Kurulum ön ayarları:")
-print(f"  Profil     : {profile}")
-print(f"  Saat dilimi: {config['timezone']}   Klavye: {kb}   Dil: en_US.UTF-8")
-print(f"  Paketler   : {', '.join(packages)}")
-print(f"  Servisler  : {', '.join(services) or '-'}")
-print(f"  limon      : {extras or 'kurulmayacak'}")
-print(f"  (ayrıntı: {path})")
 PY
+}
 
-echo
-read -rp "archinstall'ı başlatmak için INSTALL yaz: " answer
-if [[ "$answer" != "INSTALL" ]]; then
-  echo "İptal edildi."
+begin_install() {
+  local missing=()
+  [[ -z "$disk" ]] && missing+=("Kurulum hedefi")
+  admin_ok || missing+=("Yönetici hesap (kullanıcı oluştur veya root parolası belirle)")
+  if (( ${#missing[@]} > 0 )); then
+    echo
+    echo "${R}Önce tamamlanması gerekenler:${N}"
+    printf '  - %s\n' "${missing[@]}"
+    pause 3
+    return 99
+  fi
+
+  echo
+  echo "${Y}Kurulacak sistem${N}"
+  echo "  Profil      : $(profile_title "$profile")"
+  echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${R}TÜM VERİLER SİLİNECEK${N}"
+  echo "  Önyükleme   : $([[ -d /sys/firmware/efi ]] && echo UEFI || echo BIOS)"
+  echo "  Makine adı  : $hostname_v   Saat dilimi: $timezone   Klavye: $kb   Dil: en_US.UTF-8"
+  echo "  Kullanıcı   : ${username:-yok}$( ((user_admin)) && [[ -n "$username" ]] && echo ' (sudo)')   Root: $([[ -n "$root_hash" ]] && echo parolalı || echo kilitli)"
+  [[ "$profile" == workstation ]] && echo "  Masaüstü    : $(desktop_label)"
+  echo "  limon       : $(limon_label)"
+  echo
+  local answer
+  read -rp "Devam etmek için INSTALL yaz: " answer || return 1
+  if [[ "$answer" != "INSTALL" ]]; then
+    echo "Vazgeçildi."; pause; return 99
+  fi
+
+  local cfg
+  cfg="$(mktemp --suffix=.json /tmp/horos-archinstall.XXXXXX)"
+  if ! generate_config "$cfg"; then
+    echo "HATA: yapılandırma üretilemedi." >&2
+    rm -f "$cfg"; return 1
+  fi
+
+  if [[ -n "$DRYRUN" ]]; then
+    echo "DRYRUN: yapılandırma yazıldı, kurulum yapılmadı: $cfg"
+    return 0
+  fi
+
+  echo
+  prepare_pacman || { rm -f "$cfg"; return 1; }
+  umount -R /mnt 2>/dev/null || true
+  swapoff -a 2>/dev/null || true
+
+  echo
+  echo "Kurulum başlıyor..."
+  local rc=0
+  archinstall --config "$cfg" --silent || rc=$?
   rm -f "$cfg"
-  exit 0
-fi
+  return "$rc"
+}
 
-echo
-if ! prepare_pacman; then
-  rm -f "$cfg"
-  exit 1
-fi
+# ---------------------------------------------------------------- ana akış
+main() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "Kurulum aracı root olarak çalıştırılmalı."; exit 1
+  fi
+  if [[ -z "$DRYRUN" ]] && ! command -v archinstall >/dev/null; then
+    echo "archinstall bulunamadı." >&2; exit 1
+  fi
 
-exec archinstall --config "$cfg"
+  # Varsayılan profil: ilk klasör
+  profile="$(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort | head -n1)"
+  if [[ -z "$profile" ]]; then
+    echo "Profil dizini bulunamadı: $PROFILE_DIR" >&2; exit 1
+  fi
+
+  # Konum tespiti (IP'den); başarısız olursa UTC + en_US varsayılanları kalır
+  if have_net; then
+    net_state="Bağlı"
+    echo "Konum tespit ediliyor..."
+    local tz c
+    tz="$(ip_lookup timezone || true)"
+    if [[ -n "$tz" && -f "/usr/share/zoneinfo/$tz" ]]; then timezone="$tz"; tz_src="IP'den tespit edildi"; fi
+    c="$(ip_lookup country || true)"
+    [[ "$c" =~ ^[A-Z]{2}$ ]] && country="$c"
+  else
+    net_state="Bağlı değil"
+  fi
+  kb="$(keymap_for_country "$country")"
+  keymap_exists "$kb" || kb=us
+
+  # Parola girişlerinden önce klavye düzeni onaylanır (yanlış düzen parolayı bozar)
+  set_keyboard
+
+  local c rc
+  while true; do
+    show_hub
+    read -rp "Seçim: " c || { sleep 1; continue; }
+    case "$c" in
+      1) set_keyboard ;;
+      2) set_timezone ;;
+      3) set_profile ;;
+      4) set_desktop ;;
+      5) set_limon ;;
+      6) set_disk ;;
+      7) set_network ;;
+      8) set_root ;;
+      9) set_user ;;
+      b|B) begin_install; rc=$?
+           (( rc == 99 )) && continue
+           return "$rc" ;;
+      q|Q) echo "Vazgeçildi."; exit 130 ;;
+      *) echo "Geçersiz seçim."; pause ;;
+    esac
+  done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

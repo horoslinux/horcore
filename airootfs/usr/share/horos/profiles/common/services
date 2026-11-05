@@ -1,2 +1,4 @@
 # Her profilde açılan servisler
 nftables.service
+NetworkManager.service
+systemd-timesyncd.service
