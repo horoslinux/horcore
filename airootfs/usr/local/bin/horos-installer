@@ -2,7 +2,7 @@
 # HorOS Linux — diske kurulum (archinstall tabanlı, sunucu ön ayarlı)
 set -euo pipefail
 
-LIMON_URL="https://aardaakpinar.github.io/limon/install.sh"
+LIMON_URL="https://horoslinux.github.io/limon/install.sh"
 PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
 profile="${1:-}"
 
