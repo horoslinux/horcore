@@ -82,8 +82,8 @@ During installation the rules are syntax-checked with `nft -c`, and a warning is
 - **Keyboard:** suggested from the public IP country and always confirmed by you; applied to the live console immediately so the password you type matches the installed system.
 - **Time zone:** detected from the public IP; UTC if detection fails (a VPN can give a wrong zone; change it in the `archinstall` menu).
 - **Language:** always `en_US.UTF-8`.
-- **AI assistant:** optional [limon](https://github.com/aardaakpinar/limon) with one provider SDK (Claude, OpenAI, Gemini) or all. It is installed for `root`;
-  other users can run `curl -fsSL https://aardaakpinar.github.io/limon/install.sh | bash`. `limon daemon install` sets up the background agent after first login.
+- **AI assistant:** optional [limon](https://github.com/horoslinux/limon) with one provider SDK (Claude, OpenAI, Gemini) or all. It is installed for `root`;
+  other users can run `curl -fsSL https://horoslinux.github.io/limon/install.sh | bash`. `limon daemon install` sets up the background agent after first login.
 - **Package database:** before `archinstall` starts, the installer waits for the keyring and mirror services, syncs the clock, runs `pacman -Sy`,
   and on failure retries after refreshing the keyring or switching to a fixed mirror. If it still fails it prints the real error instead of starting `archinstall`.
 
