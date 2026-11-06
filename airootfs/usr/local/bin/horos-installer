@@ -16,12 +16,17 @@ Y=$'\e[1;33m'; R=$'\e[1;31m'; G=$'\e[1;32m'; D=$'\e[2m'; N=$'\e[0m'
 kb=us; timezone=UTC; tz_src="varsayılan"; country=""
 profile=""; extras=""; desktop=""
 disk=""; disk_bytes=0; disk_sec=512
-hostname_v="horos"; net_state="bilinmiyor"
+hostname_v="horos"; net_state="denetleniyor..."
 root_hash=""; username=""; user_hash=""; user_admin=1
 PW_HASH=""
+kb_ok=0; detect_done=0; DETECT_DIR=""
 
 # ---------------------------------------------------------------- yardımcılar
-have_net() { ping -c1 -W3 archlinux.org &>/dev/null; }
+# ICMP engellenmiş ağlarda yanlış "bağlantı yok" dememek için ping + HTTPS denetimi.
+have_net() {
+  ping -c1 -W2 archlinux.org &>/dev/null && return 0
+  curl -fsS --max-time 4 -o /dev/null https://archlinux.org/ &>/dev/null
+}
 
 ip_lookup() { # $1: alan (timezone | country)
   local url val
@@ -81,6 +86,48 @@ desktop_label() {
 
 pause() { sleep "${1:-1}"; }
 
+# Ağ + konum tespiti arka planda çalışır; ekran beklemeden açılır, sonuç gelince özet güncellenir.
+start_detect() {
+  DETECT_DIR="$(mktemp -d /tmp/horos-detect.XXXXXX)"
+  (
+    n=0; tz=""; c=""
+    for _ in 1 2 3 4 5 6; do
+      if have_net; then n=1; break; fi
+      sleep 1
+    done
+    if (( n )); then
+      tz="$(ip_lookup timezone || true)"
+      c="$(ip_lookup country || true)"
+    fi
+    printf 'net=%s\ntz=%s\ncountry=%s\n' "$n" "$tz" "$c" > "$DETECT_DIR/tmp" \
+      && mv "$DETECT_DIR/tmp" "$DETECT_DIR/done"
+  ) >/dev/null 2>&1 &
+}
+
+# Sonuç geldiyse uygular; ekranın yenilenmesi gerekiyorsa 0 döner.
+apply_detect() {
+  (( detect_done )) && return 1
+  [[ -f "$DETECT_DIR/done" ]] || return 1
+  local k v n="" t="" c="" kb2
+  while IFS='=' read -r k v; do
+    case "$k" in net) n="$v" ;; tz) t="$v" ;; country) c="$v" ;; esac
+  done < "$DETECT_DIR/done"
+  detect_done=1
+  if [[ "$n" == 1 ]]; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
+  if [[ -n "$t" && "$tz_src" == "varsayılan" && -f "/usr/share/zoneinfo/$t" ]]; then
+    timezone="$t"; tz_src="IP'den tespit edildi"
+  fi
+  if [[ "$c" =~ ^[A-Z]{2}$ ]]; then
+    country="$c"
+    if (( ! kb_ok )); then
+      kb2="$(keymap_for_country "$c")"
+      keymap_exists "$kb2" && kb="$kb2"
+    fi
+  fi
+  rm -rf "$DETECT_DIR"
+  return 0
+}
+
 # ---------------------------------------------------------------- bölümler
 set_keyboard() {
   local in k
@@ -93,6 +140,7 @@ set_keyboard() {
     echo "'$k' bulunamadı. Tüm düzenler için: localectl list-keymaps"
   done
   loadkeys "$kb" 2>/dev/null || true   # parola girişleri için hemen uygula
+  kb_ok=1
 }
 
 set_timezone() {
@@ -248,6 +296,7 @@ set_network() {
 # Parolayı iki kez sorar; yescrypt/sha512 özetini PW_HASH'e yazar. Boş giriş = vazgeç.
 ask_password() { # $1: etiket
   local p1 p2
+  (( kb_ok )) || set_keyboard   # yanlış düzen parolayı bozar: yazmadan önce onayla
   while true; do
     read -rsp "Parola ($1; en az 8 karakter, boş = vazgeç): " p1 || return 1; echo
     [[ -z "$p1" ]] && return 1
@@ -308,19 +357,20 @@ row() { # $1 numara, $2 etiket, $3 değer, $4 uyarı (varsa)
 admin_ok() { [[ -n "$root_hash" ]] || { [[ -n "$username" ]] && (( user_admin == 1 )); }; }
 
 show_hub() {
-  local disk_v user_v root_v warn_d="" warn_u=""
+  local disk_v user_v root_v warn_d="" warn_u="" warn_n=""
   if [[ -n "$disk" ]]; then disk_v="$disk ($(human_size "$disk_bytes")) — otomatik bölümleme"
   else disk_v="seçilmedi"; warn_d="(!) tamamlanmalı"; fi
   if [[ -n "$username" ]]; then user_v="$username$( ((user_admin)) && echo ' (yönetici)' )"
   else user_v="oluşturulmadı"; fi
   admin_ok || warn_u="(!) yönetici hesap gerekli"
+  [[ "$net_state" == "Bağlı değil" ]] && warn_n="(!) kurulum için ağ gerekli"
   if [[ -n "$root_hash" ]]; then root_v="Parola belirlendi"; else root_v="Kilitli"; fi
 
   show_banner
   echo "${Y}KURULUM ÖZETİ${N}"
   echo
   echo "${Y}YEREL AYARLAR${N}"
-  row 1 "Klavye"               "$kb"
+  row 1 "Klavye"               "$kb$( ((kb_ok)) || echo " ${D}(önerilen, onaylanmadı)${N}")"
   row 2 "Saat dilimi"          "$timezone ${D}($tz_src)${N}"
   echo "${Y}YAZILIM${N}"
   row 3 "Kurulum profili"      "$(profile_short "$profile")"
@@ -328,7 +378,7 @@ show_hub() {
   row 5 "AI asistanı (limon)"  "$(limon_label)"
   echo "${Y}SİSTEM${N}"
   row 6 "Kurulum hedefi"       "$disk_v" "$warn_d"
-  row 7 "Ağ ve makine adı"     "$net_state · $hostname_v"
+  row 7 "Ağ ve makine adı"     "$net_state · $hostname_v" "$warn_n"
   echo "${Y}KULLANICI AYARLARI${N}"
   row 8 "Root hesabı"          "$root_v"
   row 9 "Kullanıcı oluştur"    "$user_v" "$warn_u"
@@ -443,6 +493,8 @@ def file_commands(root):
     return cmds
 
 
+efi = E["H_EFI"] == "1"
+disk_dev = E["H_DISK"]
 packages, services, commands = [], [], []
 for part in ("common", profile):
     root = os.path.join(pdir, part)
@@ -461,6 +513,9 @@ if desktop == "kde":
 elif desktop == "gnome":
     packages += ["gnome", "gnome-tweaks", "gdm", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts"]
     services += ["gdm"]
+
+if desktop:
+    commands.append("systemctl set-default graphical.target")
 
 # Canlı ortamda kurulan ağ bağlantıları (Wi-Fi parolası dahil) hedef sisteme taşınır.
 for src in sorted(glob.glob("/etc/NetworkManager/system-connections/*")):
@@ -491,6 +546,53 @@ else:
 
 commands += [f"systemctl enable {s}" for s in services]
 
+# Önyükleyici: her zaman GRUB (UEFI + BIOS). archinstall'a açıkça söylenir; ayrıca aşağıdaki
+# yedek adım, archinstall önyükleyiciyi kurmadıysa veya UEFI NVRAM kaydı kalıcı değilse
+# (sanal makinelerde sık) diski yine de açılabilir yapar.
+packages += ["grub"] + (["efibootmgr"] if efi else [])
+if efi:
+    commands.append(
+        "if [ ! -f /boot/loader/loader.conf ]; then "
+        "[ -f /boot/EFI/BOOT/BOOTX64.EFI ] || "
+        "grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=HorOS --removable "
+        "|| echo 'HorOS: UYARI: GRUB (UEFI) kurulamadi'; fi; true"
+    )
+else:
+    commands.append(
+        f"[ -f /boot/grub/i386-pc/core.img ] || grub-install --target=i386-pc {shlex.quote(disk_dev)} "
+        "|| echo 'HorOS: UYARI: GRUB (BIOS) kurulamadi'; true"
+    )
+
+# Marka: kurulan sistemde os-release/issue ve önyükleyici menüsü "HorOS Linux" yazar
+# (archinstall varsayılan olarak "Arch Linux" yazar). Hatalar kurulumu durdurmaz.
+def write_text(dest, text):
+    b64 = base64.b64encode(text.encode()).decode()
+    return f"echo {b64} | base64 -d > {shlex.quote(dest)}"
+
+
+osrel = ""
+if os.path.isfile("/etc/os-release"):
+    with open("/etc/os-release", encoding="utf-8") as f:
+        osrel = f.read()
+if "HorOS" in osrel:
+    commands.append("rm -f /etc/os-release && " + write_text("/etc/os-release", osrel) + "; true")
+commands.append(write_text("/etc/issue", "HorOS Linux \\r (\\l)\n\n") + "; true")
+# GRUB (BIOS kurulumları): GRUB_DISTRIBUTOR menü adını belirler; menüyü yeniden üret.
+commands.append(
+    "if [ -f /etc/default/grub ]; then mkdir -p /boot/grub; "
+    "sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=\"HorOS\"/' /etc/default/grub; "
+    "grep -q '^GRUB_DISTRIBUTOR=' /etc/default/grub || echo 'GRUB_DISTRIBUTOR=\"HorOS\"' >> /etc/default/grub; "
+    "grub-mkconfig -o /boot/grub/grub.cfg; "
+    "sed -i -e 's#HorOS GNU/Linux#HorOS Linux#g' -e 's#Arch Linux#HorOS Linux#g' /boot/grub/grub.cfg; "
+    "fi; true"
+)
+# systemd-boot (UEFI kurulumları): giriş başlıkları
+commands.append(
+    "for f in /boot/loader/entries/*.conf; do "
+    "[ -f \"$f\" ] && sed -i 's/^\\(title[[:space:]]\\+\\)Arch Linux/\\1HorOS Linux/' \"$f\"; "
+    "done; true"
+)
+
 if extras:
     packages += ["python", "git"]
     commands.append(
@@ -498,13 +600,11 @@ if extras:
         f"|| echo 'HorOS: limon kurulamadi. Sonra elle kur: curl -fsSL {url} | bash'"
     )
 
-# Disk düzeni: UEFI'de GPT (ESP + ext4 kök), BIOS'ta MBR (FAT32 /boot + ext4 kök).
-# Tüm disk silinir. archinstall oluşturulan her bölüm için bir dosya sistemi ister;
-# BIOS'ta disk şeması MBR olduğundan bios_grub bölümü kullanılmaz.
+# Disk düzeni: UEFI için ESP + ext4 kök; BIOS için FAT32 /boot (boot bayraklı) + ext4 kök.
+# archinstall her oluşturduğu bölümde dosya sistemi bekler; BIOS'ta da önyükleyici bölümü şarttır.
+# Tüm disk silinir.
 sec = int(E["H_SEC"])
 total_mib = int(E["H_BYTES"]) // (1024 * 1024)
-efi = E["H_EFI"] == "1"
-
 
 def size_of(mib):
     return {"sector_size": {"unit": "B", "value": sec}, "unit": "MiB", "value": mib}
@@ -526,6 +626,9 @@ else:
              part(1025, total_mib - 1025 - 1, "ext4", [], "/")]
 
 config = {
+    # Eski şema ("bootloader") ve yeni şema ("bootloader_config"): archinstall bilmediğini yok sayar.
+    "bootloader": "Grub",
+    "bootloader_config": {"bootloader": "Grub", "uki": False, "removable": True},
     "hostname": E["H_HOST"],
     "packages": list(dict.fromkeys(packages)),
     "custom_commands": commands,
@@ -542,10 +645,51 @@ with os.fdopen(fd, "w", encoding="utf-8") as f:
 PY
 }
 
+# Kurulum bitince diski salt-okunur bağlayıp çekirdek, initramfs ve önyükleyici dosyalarını arar.
+verify_boot() {
+  local m efi=0 parts=() boot root problems=()
+  [[ -d /sys/firmware/efi ]] && efi=1
+  umount -R /mnt 2>/dev/null || true
+  mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
+  if (( ${#parts[@]} < 2 )); then
+    echo "${R}UYARI:${N} $disk üzerinde beklenen bölümler bulunamadı."; return 1
+  fi
+  # İlk bölüm her iki düzende de /boot (UEFI'de ESP, BIOS'ta FAT32 boot).
+  boot="${parts[0]}"; root="${parts[-1]}"
+  m="$(mktemp -d /tmp/horos-verify.XXXXXX)"
+  if ! mount -o ro "$root" "$m" 2>/dev/null; then
+    echo "${R}UYARI:${N} kök bölüm ($root) bağlanamadı."; rmdir "$m"; return 1
+  fi
+  mount -o ro "$boot" "$m/boot" 2>/dev/null || problems+=("boot bölümü ($boot) bağlanamadı")
+  [[ -s "$m/boot/vmlinuz-linux" ]]        || problems+=("çekirdek yok (/boot/vmlinuz-linux)")
+  [[ -s "$m/boot/initramfs-linux.img" ]]  || problems+=("initramfs yok (/boot/initramfs-linux.img)")
+  [[ -f "$m/boot/grub/grub.cfg" || -f "$m/boot/loader/loader.conf" ]] \
+    || problems+=("önyükleyici yapılandırması yok (grub.cfg)")
+  if (( efi )); then
+    find "$m/boot/EFI" -iname '*.efi' 2>/dev/null | grep -q . || problems+=("EFI önyükleyici dosyası yok")
+  else
+    [[ -f "$m/boot/grub/i386-pc/core.img" ]] || problems+=("GRUB (BIOS) core.img yok")
+  fi
+  umount -R "$m" 2>/dev/null || true
+  rmdir "$m" 2>/dev/null || true
+  if (( ${#problems[@]} > 0 )); then
+    echo "${R}Önyükleme doğrulaması başarısız:${N}"
+    printf '  - %s\n' "${problems[@]}"
+    echo "Kayıt: /var/log/archinstall/install.log"
+    return 1
+  fi
+  echo "${G}Önyükleme doğrulandı:${N} çekirdek, initramfs ve önyükleyici yerinde."
+  return 0
+}
+
 begin_install() {
   local missing=()
   [[ -z "$disk" ]] && missing+=("Kurulum hedefi")
   admin_ok || missing+=("Yönetici hesap (kullanıcı oluştur veya root parolası belirle)")
+  if [[ -z "$DRYRUN" ]]; then
+    echo "Ağ denetleniyor..."
+    if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; missing+=("İnternet bağlantısı (7 numaralı maddeden ağı ayarla)"); fi
+  fi
   if (( ${#missing[@]} > 0 )); then
     echo
     echo "${R}Önce tamamlanması gerekenler:${N}"
@@ -557,11 +701,11 @@ begin_install() {
   echo
   echo "${Y}Kurulacak sistem${N}"
   echo "  Profil      : $(profile_title "$profile")"
+  echo "  Masaüstü    : $(desktop_label)"
   echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${R}TÜM VERİLER SİLİNECEK${N}"
   echo "  Önyükleme   : $([[ -d /sys/firmware/efi ]] && echo UEFI || echo BIOS)"
   echo "  Makine adı  : $hostname_v   Saat dilimi: $timezone   Klavye: $kb   Dil: en_US.UTF-8"
   echo "  Kullanıcı   : ${username:-yok}$( ((user_admin)) && [[ -n "$username" ]] && echo ' (sudo)')   Root: $([[ -n "$root_hash" ]] && echo parolalı || echo kilitli)"
-  [[ "$profile" == workstation ]] && echo "  Masaüstü    : $(desktop_label)"
   echo "  limon       : $(limon_label)"
   echo
   local answer
@@ -592,6 +736,10 @@ begin_install() {
   local rc=0
   archinstall --config "$cfg" --silent || rc=$?
   rm -f "$cfg"
+  if (( rc == 0 )); then
+    echo
+    verify_boot || rc=3
+  fi
   return "$rc"
 }
 
@@ -610,28 +758,24 @@ main() {
     echo "Profil dizini bulunamadı: $PROFILE_DIR" >&2; exit 1
   fi
 
-  # Konum tespiti (IP'den); başarısız olursa UTC + en_US varsayılanları kalır
-  if have_net; then
-    net_state="Bağlı"
-    echo "Konum tespit ediliyor..."
-    local tz c
-    tz="$(ip_lookup timezone || true)"
-    if [[ -n "$tz" && -f "/usr/share/zoneinfo/$tz" ]]; then timezone="$tz"; tz_src="IP'den tespit edildi"; fi
-    c="$(ip_lookup country || true)"
-    [[ "$c" =~ ^[A-Z]{2}$ ]] && country="$c"
-  else
-    net_state="Bağlı değil"
-  fi
-  kb="$(keymap_for_country "$country")"
-  keymap_exists "$kb" || kb=us
+  # Ekran hemen açılır: ağ/konum tespiti arka planda, klavye parola yazılmadan önce onaylanır.
+  trap '[[ -n "$DETECT_DIR" ]] && rm -rf "$DETECT_DIR"' EXIT
+  kb=us
+  start_detect
 
-  # Parola girişlerinden önce klavye düzeni onaylanır (yanlış düzen parolayı bozar)
-  set_keyboard
-
-  local c rc
+  local c rc st buf="" redraw=1 targs
   while true; do
-    show_hub
-    read -rp "Seçim: " c || { sleep 1; continue; }
+    if (( redraw )); then show_hub; printf 'Seçim: '; buf=""; fi
+    redraw=1
+    targs=(); (( detect_done )) || targs=(-t 1)
+    read -r "${targs[@]}" c; st=$?
+    if (( st > 128 )); then          # zaman aşımı: yazılmakta olan girdiyi koru
+      buf+="$c"
+      if apply_detect; then redraw=1; else redraw=0; fi
+      continue
+    fi
+    if (( st != 0 )); then sleep 1; continue; fi
+    c="$buf$c"; buf=""
     case "$c" in
       1) set_keyboard ;;
       2) set_timezone ;;

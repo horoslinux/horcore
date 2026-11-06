@@ -1,6 +1,3 @@
-# HorOS: tty1'de otomatik girişte kurulumu doğrudan başlat
-# (HOROS_NO_MENU=1 ile atlanır; SSH/diğer tty'lerde çalışmaz)
-if [[ -z "${HOROS_NO_MENU:-}" && "$(tty)" == /dev/tty1 && -x /usr/local/bin/horos ]]; then
-  exec /usr/local/bin/horos
-fi
+# HorOS: kurulum arayüzü tty1'de systemd tarafından başlatılır (getty@tty1 drop-in'i);
+# bu dosya yalnızca diğer girişlerde (tty2, SSH) kabuğa devam eder.
 [[ -f ~/.bashrc ]] && . ~/.bashrc

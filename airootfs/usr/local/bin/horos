@@ -1,45 +1,16 @@
 #!/usr/bin/env bash
-# HorOS Linux — açılışta doğrudan kurulum (menü yok)
+# HorOS Linux — tty1'de systemd tarafından başlatılır (getty@tty1 drop-in'i).
+# Ağ bekleme, banner vb. yok: installer hemen açılır; ağ ve konum arka planda denetlenir.
 # Not: bilinçli olarak "set -e" yok; bir adım hata verirse kurulum ekranı kapanmasın.
 set -uo pipefail
 
-show_banner() {
-  clear
-  cat <<'BANNER'
- _   _            ___  ____
-| | | | ___  _ __/ _ \/ ___|
-| |_| |/ _ \| '__| | | \___ \
-|  _  | (_) | |  | |_| |___) |
-|_| |_|\___/|_|   \___/|____/
-
-          HorOS Linux
-BANNER
-  echo
-}
-
-have_net() { ping -c1 -W3 archlinux.org &>/dev/null; }
-
-# 1) Ağ: bağlantı yoksa Wi-Fi/kablolu ayarını otomatik aç
-ensure_network() {
-  local i
-  for i in 1 2 3 4 5; do   # DHCP'nin gelmesi için kısa bekleme
-    have_net && return 0
-    sleep 1
-  done
-  echo "İnternet bağlantısı yok. Ağ ayarı açılıyor (Wi-Fi için)..."
-  sleep 1
-  nmtui || true
-}
+printf '\e[?25h'   # vt.global_cursor_default=0 ile gizlenen imleci geri aç
 
 while true; do
-  show_banner
-  ensure_network
-
-  # 2) Kurulum: profil seçimi -> ön ayarlar -> archinstall
   /usr/local/bin/horos-installer
   rc=$?
 
-  # 3) Bitti / iptal / hata: kısa sonuç menüsü
+  # Bitti / iptal / hata: kısa sonuç menüsü
   echo
   if (( rc == 0 )); then
     echo "Kurulum tamamlandı. USB/ISO'yu çıkarıp yeniden başlat."
@@ -55,6 +26,6 @@ while true; do
     t)    continue ;;
     n)    nmtui || true ;;
     k)    systemctl poweroff ;;
-    s|shell) exec bash ;;
+    s|shell) bash ;;   # çıkınca kurulum yeniden açılır
   esac
 done

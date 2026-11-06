@@ -1,0 +1,4 @@
+# HorOS is built on Linux. Force LF in the working tree even when the repo is
+# cloned on Windows, otherwise shell scripts fail with "bad interpreter".
+* text=auto eol=lf
+*.png binary
