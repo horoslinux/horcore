@@ -1,6 +1,6 @@
 # HorOS Linux
 
-A terminal-focused Live ISO and terminal installation wizard based on Arch Linux.
+An AI-native, terminal-focused Live ISO and terminal installation wizard based on Arch Linux. The [limon](https://github.com/horoslinux/limon) AI assistant is installed with every system; you pick the provider during setup.
 
 ## Minimum system requirements
 
@@ -69,7 +69,7 @@ has `quiet splash loglevel=3 systemd.show_status=false`. The screen opens at onc
 | 2 | Time zone | detected from the IP, UTC if it fails |
 | 3 | Installation profile | Server / Workstation |
 | 4 | Desktop environment | not installed; asks KDE Plasma or GNOME when Workstation is selected (item 3) |
-| 5 | AI assistant (limon) | not installed |
+| 5 | AI assistant (limon) | base installed; provider chosen during setup |
 | 6 | Installation destination | **required**; the whole disk is erased, the live medium is hidden |
 | 7 | Network and host name | `horos` |
 | 8 | Root account | locked (or set a password) |
@@ -140,8 +140,11 @@ During installation the rules are syntax-checked with `nft -c`, and a warning is
 - **Keyboard:** suggested from the public IP country and always confirmed by you; applied to the live console immediately so the password you type matches the installed system.
 - **Time zone:** detected from the public IP; UTC if detection fails (a VPN can give a wrong zone; change it in the `archinstall` menu).
 - **Language:** the installed system uses `en_US.UTF-8`. The live ISO uses `C.UTF-8` (as the official archiso does), because `en_US.UTF-8` is not generated in the live image and would make every shell print `setlocale` warnings.
-- **AI assistant:** optional [limon](https://github.com/horoslinux/limon) with one provider SDK (Claude, OpenAI, Gemini) or all. It is installed for `root`;
-  other users can run `curl -fsSL https://horoslinux.github.io/limon/install.sh | bash`. `limon daemon install` sets up the background agent after first login.
+- **AI assistant:** [limon](https://github.com/horoslinux/limon) is installed for `root` in **every** installation (AI-native default). Before installation begins you choose
+  which provider SDK to add — Claude, OpenAI, Gemini, all, or base only (item 5 in the summary can change it; the provider/API key is set with `limon config`).
+  The installer clones the limon source to `/root/.limon` and runs its `install.sh` with an explicit `--extras=` value (empty means base only, since limon's own default is `all`).
+  Other users can install it with `curl -fsSL https://horoslinux.github.io/limon/install.sh | bash -s -- --extras=` (add `claude`, `openai`, `gemini` or `all` after `--extras=`).
+  `limon daemon install` sets up the background agent after first login.
 - **Package database:** before `archinstall` starts, the installer waits for the keyring and mirror services, syncs the clock, runs `pacman -Sy`,
   and on failure retries after refreshing the keyring or switching to a fixed mirror. If it still fails it prints the real error instead of starting `archinstall`.
 

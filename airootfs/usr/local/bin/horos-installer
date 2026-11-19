@@ -5,7 +5,8 @@
 set -uo pipefail
 export LC_ALL=C.UTF-8   # ${#var} karakter saysın (Türkçe harflerle hizalama)
 
-LIMON_URL="https://horoslinux.github.io/limon/install.sh"
+# Kurulum betiği kaynak ağacın içinde çalışır (pip install -e .): önce depoyu klonlarız.
+LIMON_REPO="https://github.com/horoslinux/limon.git"
 PROFILE_DIR="${HOROS_PROFILE_DIR:-/usr/share/horos/profiles}"
 KEYMAP_DIR="${KEYMAP_DIR:-/usr/share/kbd/keymaps}"
 DRYRUN="${HOROS_DRYRUN:-}"
@@ -19,7 +20,7 @@ disk=""; disk_bytes=0; disk_sec=512
 hostname_v="horos"; net_state="denetleniyor..."
 root_hash=""; username=""; user_hash=""; user_admin=1
 PW_HASH=""
-kb_ok=0; detect_done=0; DETECT_DIR=""
+kb_ok=0; detect_done=0; limon_asked=0; DETECT_DIR=""
 
 # ---------------------------------------------------------------- yardımcılar
 # ICMP engellenmiş ağlarda yanlış "bağlantı yok" dememek için ping + HTTPS denetimi.
@@ -65,10 +66,13 @@ profile_title() {
 profile_short() { profile_title "$1" | sed 's/ —.*//'; }
 
 limon_label() {
+  # limon tabanı her kurulumda gelir; extras yalnızca provider SDK'larını ekler.
   case "$extras" in
-    "") echo "Kurulmayacak" ;;
-    all) echo "Kurulacak (Claude, OpenAI, Gemini)" ;;
-    *) echo "Kurulacak ($extras)" ;;
+    all)    echo "Kurulu (Claude, OpenAI, Gemini)" ;;
+    claude) echo "Kurulu (Claude)" ;;
+    openai) echo "Kurulu (OpenAI)" ;;
+    gemini) echo "Kurulu (Gemini)" ;;
+    *)      echo "Kurulu (temel; provider sonra: limon config)" ;;
   esac
 }
 
@@ -204,13 +208,15 @@ set_desktop() {
 set_limon() {
   local a
   echo
-  echo "AI asistanı (limon). Yalnızca seçtiğin sağlayıcının SDK'sı kurulur."
-  echo "  1) Hayır"
-  echo "  2) Evet — Claude"
-  echo "  3) Evet — OpenAI"
-  echo "  4) Evet — Gemini"
-  echo "  5) Evet — hepsi"
+  echo "AI asistanı (limon) temel olarak her kurulumda gelir."
+  echo "Hangi sağlayıcının SDK'sı da eklensin? (API anahtarını 'limon config' ile vereceksin)"
+  echo "  1) Sadece temel — sağlayıcıyı sonra 'limon config' ile seç"
+  echo "  2) Claude"
+  echo "  3) OpenAI"
+  echo "  4) Gemini"
+  echo "  5) Hepsi"
   read -rp "Seçim [1-5]: " a || return 0
+  limon_asked=1
   case "$a" in
     1) extras="" ;;
     2) extras=claude ;;
@@ -449,8 +455,8 @@ generate_config() { # $1: çıktı dosyası
   [[ -n "${HOROS_EFI:-}" ]] && efi="$HOROS_EFI"   # yalnızca test için
   compgen -G '/sys/class/net/*/wireless' >/dev/null && wifi=1
 
-  H_PROFILE="$profile" H_PDIR="$PROFILE_DIR" H_EXTRAS="$extras" H_URL="$LIMON_URL" \
-  H_DESKTOP="$desktop" \
+  H_PROFILE="$profile" H_PDIR="$PROFILE_DIR" H_EXTRAS="$extras" \
+  H_REPO="$LIMON_REPO" H_DESKTOP="$desktop" \
   H_TZ="$timezone" H_KB="$kb" H_HOST="$hostname_v" H_DISK="$disk" H_BYTES="$disk_bytes" \
   H_SEC="$disk_sec" H_EFI="$efi" H_WIFI="$wifi" H_USER="$username" H_USERHASH="$user_hash" \
   H_ADMIN="$user_admin" H_ROOTHASH="$root_hash" \
@@ -459,8 +465,8 @@ import base64, glob, json, os, shlex, sys, uuid
 
 E = os.environ
 out = sys.argv[1]
-profile, pdir, extras, url = E["H_PROFILE"], E["H_PDIR"], E["H_EXTRAS"], E["H_URL"]
-desktop = E["H_DESKTOP"]
+profile, pdir, extras = E["H_PROFILE"], E["H_PDIR"], E["H_EXTRAS"]
+repo, desktop = E["H_REPO"], E["H_DESKTOP"]
 username, user_hash, admin = E["H_USER"], E["H_USERHASH"], E["H_ADMIN"] == "1"
 root_hash = E["H_ROOTHASH"]
 
@@ -593,12 +599,19 @@ commands.append(
     "done; true"
 )
 
-if extras:
-    packages += ["python", "git"]
-    commands.append(
-        f"curl -fsSL {url} | bash -s -- --extras {extras} "
-        f"|| echo 'HorOS: limon kurulamadi. Sonra elle kur: curl -fsSL {url} | bash'"
-    )
+# AI-native varsayılan: limon tabanı her kuruluma gelir; extras yalnızca provider SDK'ları ekler.
+# install.sh kaynak ağacın içinde çalışır (pip install -e .), bu yüzden depoyu klonlayıp içinden çalıştırırız.
+packages += ["python", "git"]
+# install.sh'in varsayılanı "all" olduğu için temel kurulumda bile --extras'ı açıkça geçir.
+# extras boşsa "--extras=" (boş değer) temel bağımlılıkları kurar; değerler sabit listeden gelir.
+extra_arg = " --extras=" + extras
+limon_dir = "/root/.limon"
+commands.append(
+    f"git clone --depth 1 {shlex.quote(repo)} {limon_dir} "
+    f"&& (cd {limon_dir} && HOME=/root bash install.sh{extra_arg}) "
+    f"|| echo 'HorOS: UYARI: limon kurulamadi. Sonra elle kur: "
+    f"git clone {repo} /root/.limon && cd /root/.limon && HOME=/root bash install.sh{extra_arg}'; true"
+)
 
 # Disk düzeni: UEFI için ESP + ext4 kök; BIOS için FAT32 /boot (boot bayraklı) + ext4 kök.
 # archinstall her oluşturduğu bölümde dosya sistemi bekler; BIOS'ta da önyükleyici bölümü şarttır.
@@ -697,6 +710,9 @@ begin_install() {
     pause 3
     return 99
   fi
+
+  # AI-native kurulum: provider seçimi kullanıcıya mutlaka sorulur (madde 5'ten değiştirilebilir).
+  if (( ! limon_asked )); then set_limon; fi
 
   echo
   echo "${Y}Kurulacak sistem${N}"
