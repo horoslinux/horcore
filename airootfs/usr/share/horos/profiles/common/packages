@@ -3,3 +3,18 @@ nano
 nftables
 openssh
 networkmanager
+
+# Günlük terminal araçları
+less
+htop
+curl
+wget
+bash-completion
+man-db
+man-pages
+pciutils
+usbutils
+
+# Çift sistem: Windows'u GRUB menüsünde göstermek için
+os-prober
+fuse3
