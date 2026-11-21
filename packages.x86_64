@@ -26,6 +26,7 @@ usbutils
 
 # Network and terminal tools
 networkmanager
+xdg-utils
 wpa_supplicant
 iw
 reflector

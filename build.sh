@@ -63,14 +63,16 @@ done
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
-WALLPAPER="$ROOT/airootfs/usr/share/backgrounds/horos/horos-wallpaper.png"
-for f in "$BRAND_ICON" "$WALLPAPER"; do
-  if [[ ! -f "$f" ]]; then
-    echo "HATA: Marka dosyası eksik: $f" >&2
-    echo "      Yeniden üret: python3 tools/generate-branding.py" >&2
-    exit 1
-  fi
-done
+WALLPAPER_DIR="$ROOT/airootfs/usr/share/backgrounds/horos"
+if [[ ! -f "$BRAND_ICON" ]]; then
+  echo "HATA: Marka dosyası eksik: $BRAND_ICON" >&2
+  echo "      Yeniden üret: python3 tools/generate-branding.py" >&2
+  exit 1
+fi
+if ! compgen -G "$WALLPAPER_DIR/*.jpg" >/dev/null; then
+  echo "HATA: Duvar kağıdı bulunamadı: $WALLPAPER_DIR/*.jpg" >&2
+  exit 1
+fi
 
 # Simgeyi canlı sistemde de görünür yap (hicolor / pixmaps).
 ICON_DIR="$ROOT/airootfs/usr/share/icons/hicolor/512x512/apps"

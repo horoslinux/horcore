@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate the HorOS icon and wallpaper from the Plymouth logo mark.
+"""Generate the HorOS icon and Plymouth splash mark from the logo source.
 
 Run from the repository root with Python + Pillow installed:
 
     python3 tools/generate-branding.py
 
 The generated PNGs are committed; Pillow is only needed to regenerate them.
+Wallpapers are curated JPEGs and are no longer generated here.
 """
 
 from pathlib import Path
@@ -15,7 +16,6 @@ from PIL import Image, ImageDraw, ImageFilter
 ROOT = Path(__file__).resolve().parent.parent
 LOGO = ROOT / "airootfs/usr/share/plymouth/themes/horos/logo.png"
 ICON = ROOT / "airootfs/usr/share/horos/branding/horos-icon.png"
-WALLPAPER = ROOT / "airootfs/usr/share/backgrounds/horos/horos-wallpaper.png"
 MARK = ROOT / "airootfs/usr/share/plymouth/themes/horos/horos-mark.png"
 
 AMBER = (253, 196, 29)
@@ -86,37 +86,8 @@ def make_icon(m: Image.Image) -> None:
     badge.save(ICON, optimize=True)
 
 
-def make_wallpaper(m: Image.Image) -> None:
-    w, h = 1920, 1080
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    px = img.load()
-    for y in range(h):
-        t = y / (h - 1)
-        for x in range(w):
-            # Koyu, hafif maviye kaymış bir düşey gradyan + merkezde altın ışık.
-            dx = (x - w / 2) / (w / 2)
-            dy = (y - h / 2) / (h / 2)
-            glow = max(0.0, 1.0 - (dx * dx + dy * dy * 1.6)) ** 3
-            px[x, y] = (
-                round(9 + 8 * (1 - t) + 30 * glow),
-                round(11 + 8 * (1 - t) + 23 * glow),
-                round(16 + 9 * (1 - t) + 6 * glow),
-                255,
-            )
-
-    # Tek bir yumuşak merkez ışığı yeterli; ızgara ve ikinci (logo) glow
-    # arka planı gereğinden fazla kalabalıklaştırıyordu.
-    logo = fit(m, 780)
-    lx, ly = (w - logo.width) // 2, h // 2 - logo.height // 2 - 40
-    img.alpha_composite(logo, (lx, ly))
-
-    WALLPAPER.parent.mkdir(parents=True, exist_ok=True)
-    img.convert("RGB").save(WALLPAPER, optimize=True)
-
-
 if __name__ == "__main__":
     logo_mark = mark()
     make_plymouth_mark(logo_mark)
     make_icon(logo_mark)
-    make_wallpaper(logo_mark)
-    print(f"Wrote {MARK.relative_to(ROOT)}, {ICON.relative_to(ROOT)} and {WALLPAPER.relative_to(ROOT)}")
+    print(f"Wrote {MARK.relative_to(ROOT)} and {ICON.relative_to(ROOT)}")

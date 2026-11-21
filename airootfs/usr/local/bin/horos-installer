@@ -618,7 +618,8 @@ for part in ("common", profile):
     commands += file_commands(root)
 
 # Kablosuz, ses ve GPU firmware'u her kuruluma gelir.
-packages += ["linux-firmware"]
+# xdg-utils, HorOS kısayolundaki xdg-open çağrısının çalışması için gerekli.
+packages += ["linux-firmware", "xdg-utils"]
 # Canlı ortamda algılanan donanıma göre sürücüler (NVIDIA, Broadcom, sanallaştırma...).
 packages += E.get("H_DRIVERS", "").split()
 
@@ -628,10 +629,10 @@ if E["H_WIFI"] == "1":
 # Masaüstü ortamı — yalnızca Workstation profilinde sorulur.
 # Ortak ses/görüntü paketleri: PipeWire ve Mesa.
 if desktop == "kde":
-    packages += ["plasma-meta", "plasma-login-manager", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts"]
+    packages += ["plasma-meta", "plasma-login-manager", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts", "firefox"]
     services += ["plasmalogin"]
 elif desktop == "gnome":
-    packages += ["gnome", "gnome-tweaks", "gdm", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts"]
+    packages += ["gnome", "gnome-tweaks", "gdm", "pipewire", "pipewire-pulse", "wireplumber", "mesa", "noto-fonts", "firefox"]
     services += ["gdm"]
 
 if desktop:
@@ -736,10 +737,18 @@ commands.append(
     "done; true"
 )
 
-# Marka varlıkları: uygulama simgesi ve masaüstü duvar kağıdı kurulan sisteme de gider.
+# Marka varlıkları: uygulama simgesi, HorOS project menü kategorisi ve duvar kağıtları.
 icon_src = "/usr/share/horos/branding/horos-icon.png"
-wall_src = "/usr/share/backgrounds/horos/horos-wallpaper.png"
-wall_dest = "/usr/share/backgrounds/horos/horos-wallpaper.png"
+wall_dir = "/usr/share/backgrounds/horos"   # live ve hedef sistemde ayni yol
+wallpapers = sorted(
+    p for p in glob.glob(os.path.join(wall_dir, "*"))
+    if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (".jpg", ".jpeg", ".png", ".webp")
+)
+# Varsayilan: horos-wallpaper-NN serisinin ilk gorseli (diger ek gorseller
+# listeye girer ama varsayilan olarak secilmez).
+branded = [p for p in wallpapers if os.path.basename(p).startswith("horos-wallpaper-")]
+wall_src = branded[0] if branded else (wallpapers[0] if wallpapers else "")
+wall_dest = wall_src
 if os.path.isfile(icon_src):
     commands.append(write_cmd(icon_src, "/usr/share/pixmaps/horos.png", "644"))
     commands.append(write_cmd(icon_src, "/usr/share/icons/hicolor/512x512/apps/horos.png", "644"))
@@ -748,19 +757,35 @@ if os.path.isfile(icon_src):
         + write_text("/usr/share/applications/horos.desktop",
                      "[Desktop Entry]\nType=Application\nName=HorOS\nComment=HorOS Linux\n"
                      "Exec=xdg-open https://horoslinux.github.io\nIcon=horos\n"
-                     "Categories=System;\nTerminal=false\n")
+                     "Categories=HorOS-project;\nTerminal=false\nStartupNotify=true\n")
         + " || true"
     )
+    # Freedesktop menü spec: uygulama "HorOS project" alt kategorisinde görünür.
+    menu_xml = "\n".join([
+        '<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"',
+        ' "http://www.freedesktop.org/standards/menu-spec/1.0/menu.dtd">',
+        '<Menu>',
+        '  <Name>Applications</Name>',
+        '  <Menu>',
+        '    <Name>HorOS-project</Name>',
+        '    <Directory>horos-project.directory</Directory>',
+        '    <Include>',
+        '      <Category>HorOS-project</Category>',
+        '    </Include>',
+        '  </Menu>',
+        '</Menu>',
+        '',
+    ])
+    commands.append(" && ".join([
+        "mkdir -p /usr/share/desktop-directories /etc/xdg/menus/applications-merged",
+        write_text("/usr/share/desktop-directories/horos-project.directory",
+                   "[Desktop Entry]\nType=Directory\nName=HorOS project\nIcon=horos\n"),
+        write_text("/etc/xdg/menus/applications-merged/horos.menu", menu_xml),
+    ]) + " || true")
     commands.append("gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true")
 # /usr/share/backgrounds/horos icindeki tum gorselleri once hedef sisteme kopyalar,
 # sonra GNOME ve KDE'nin "Arka plan" secenek listelerine kaydeder. Kanonik dosyalar
 # olmadan XML'deki yollar bos onizlemeye yol acardi.
-wall_dir = os.path.dirname(wall_src)   # live ve hedef sistemde ayni yol
-wallpapers = sorted(
-    p for p in glob.glob(os.path.join(wall_dir, "*"))
-    if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (".png", ".jpg", ".jpeg", ".webp")
-)
-
 if wallpapers:
     def xml_escape(value):
         return (value.replace("&", "&amp;").replace("<", "&lt;")
