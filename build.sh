@@ -52,14 +52,8 @@ link pacman-init.service    /etc/systemd/system/pacman-init.service
 # Betikler çalıştırılabilir olsun
 chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
 
-# Plymouth teması initramfs'e gireceği için kaynakta eksiksiz olmalı.
-THEME_DIR="$ROOT/airootfs/usr/share/plymouth/themes/horos"
-for f in horos.plymouth horos.script logo.png horos-mark.png seg.png; do
-  if [[ ! -f "$THEME_DIR/$f" ]]; then
-    echo "HATA: Plymouth teması eksik: $THEME_DIR/$f" >&2
-    exit 1
-  fi
-done
+# Açılış ekranı Arch'in varsayılan Plymouth temasını kullanır; profil Theme= değerini
+# ezmez. Kaynakta özel tema dosyaları marka kaynağı olarak kalabilir.
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
@@ -100,7 +94,7 @@ if (( ${#isos[@]} == 0 )); then
 fi
 iso="$(ls -1t "${isos[@]}" | sed -n '1p')"
 
-# Markalamanın gerçekten ISO'ya girdiğini doğrula: tema initramfs içinde olmalı.
+# Açılış ekranının ISO'ya girdiğini doğrula: Plymouth varsayılanları initramfs'te olmalı.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 bsdtar -tf "$iso" > "$tmp/iso.list"
@@ -111,13 +105,12 @@ if [[ -z "$initramfs_rel" ]]; then
 fi
 bsdtar -xf "$iso" -C "$tmp" "$initramfs_rel"
 lsinitcpio "$tmp/$initramfs_rel" > "$tmp/initramfs.list"
-if ! grep -q 'usr/share/plymouth/themes/horos/horos.plymouth' "$tmp/initramfs.list"; then
-  echo "HATA: HorOS Plymouth teması initramfs içinde yok." >&2
+if ! grep -q 'usr/share/plymouth/plymouthd.defaults' "$tmp/initramfs.list"; then
+  echo "HATA: Plymouth varsayılan yapılandırması initramfs içinde yok." >&2
   echo "      initramfs: $initramfs_rel" >&2
-  echo "      Temanın /usr/share/plymouth/themes/horos altında olduğundan emin ol." >&2
   exit 1
 fi
-echo "Plymouth teması initramfs içinde doğrulandı."
+echo "Plymouth varsayılan teması initramfs içinde doğrulandı."
 
 echo
 echo "Tamamlandı: $iso"
