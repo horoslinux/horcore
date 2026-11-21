@@ -177,9 +177,9 @@ The answers are written to an `archinstall` JSON config (`hostname`, `packages`,
 
 ## Boot screen
 
-- The loading screen uses **Arch's default Plymouth theme**. The profile no longer ships `/etc/plymouth/plymouthd.conf`, so Plymouth reads `/usr/share/plymouth/plymouthd.defaults` from the `plymouth` package (`Theme=bgrt` on Arch). No custom spinner or logo is selected at boot.
-- `quiet splash` remains on the kernel command line, so Plymouth is actually shown during boot.
-- The old custom theme files in `airootfs/usr/share/plymouth/themes/horos/` are kept only as branding sources for the icon generator (`logo.png`); they are not activated.
+- The loading screen uses **HorOS's own Plymouth theme**: `Theme=horos` in `/etc/plymouth/plymouthd.conf` selects the script theme in `airootfs/usr/share/plymouth/themes/horos/` (HorOS mark + 16-segment circular animation). The mkinitcpio `plymouth` hook copies the theme into the initramfs, and `build.sh` verifies it is present.
+- `quiet splash` remains on the live ISO's kernel command line, so Plymouth is actually shown during boot.
+- The installer copies the same theme to the installed system, selects it, adds `splash` to the boot command line and regenerates the initramfs, so installed HorOS shows the same logo instead of the Arch one.
 - `systemd.firstboot=off` is set on the kernel command line, and `locale.conf`, `vconsole.conf` and a UTC `localtime` are shipped, so systemd's "Initial Setup" prompts never appear.
 
 ### About "Loading Linux linux" / "Loading initial ramdisk"
@@ -206,7 +206,7 @@ HorOS branding disables it cleanly: the `message=` line in `/etc/grub.d/10_linux
 - Shell greeting: `airootfs/etc/motd`, `airootfs/etc/issue`, `airootfs/etc/os-release`
 - Installer autostart on tty1: `airootfs/etc/systemd/system/getty@tty1.service.d/10-horos.conf`
 - Boot menu: `syslinux/` (BIOS), `efiboot/` (UEFI)
-- Default Arch Plymouth boot screen: `plymouth` in `packages.x86_64`, `quiet splash` in `syslinux/archiso_sys-linux.cfg`; custom theme files under `airootfs/usr/share/plymouth/themes/horos/` are unused branding sources
+- HorOS Plymouth boot screen: `plymouth` in `packages.x86_64`, `Theme=horos` in `airootfs/etc/plymouth/plymouthd.conf`, theme files in `airootfs/usr/share/plymouth/themes/horos/`, `quiet splash` in `syslinux/archiso_sys-linux.cfg`
 - Icon asset: `airootfs/usr/share/horos/branding/horos-icon.png`. Wallpapers are curated JPEGs in `airootfs/usr/share/backgrounds/horos/`; the generated `horos-wallpaper.png` was removed.
 - The installer copies **every image** in `/usr/share/backgrounds/horos/` into the installed system, registers them with GNOME (`/usr/share/gnome-background-properties/horos.xml`) and KDE Plasma (`/usr/share/wallpapers/horos…/` KPackage folders containing symlinks to the canonical files), and uses the first `horos-wallpaper-NN.jpg` as the default. Files are named `horos-wallpaper-NN.jpg`; extra favourites are accepted under any name.
 - Hardware driver rules and swapfile: `airootfs/usr/local/bin/horos-installer`

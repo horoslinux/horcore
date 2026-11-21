@@ -52,8 +52,8 @@ link pacman-init.service    /etc/systemd/system/pacman-init.service
 # Betikler çalıştırılabilir olsun
 chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
 
-# Açılış ekranı Arch'in varsayılan Plymouth temasını kullanır; profil Theme= değerini
-# ezmez. Kaynakta özel tema dosyaları marka kaynağı olarak kalabilir.
+# Açılış ekranı HorOS'un kendi Plymouth temasını kullanır. /etc/plymouth/plymouthd.conf
+# Theme=horos seçer; mkinitcpio plymouth hook'u tema klasörünü initramfs'e kopyalar.
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
@@ -94,7 +94,12 @@ if (( ${#isos[@]} == 0 )); then
 fi
 iso="$(ls -1t "${isos[@]}" | sed -n '1p')"
 
-# Açılış ekranının ISO'ya girdiğini doğrula: Plymouth varsayılanları initramfs'te olmalı.
+# Açılış ekranının ISO'ya girdiğini doğrula: HorOS teması ve seçimi initramfs'te olmalı.
+if ! grep -Eq '^[[:space:]]*Theme[[:space:]]*=[[:space:]]*horos[[:space:]]*$' \
+     "$ROOT/airootfs/etc/plymouth/plymouthd.conf"; then
+  echo "HATA: plymouthd.conf içinde 'Theme=horos' bulunamadı." >&2
+  exit 1
+fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 bsdtar -tf "$iso" > "$tmp/iso.list"
@@ -105,12 +110,17 @@ if [[ -z "$initramfs_rel" ]]; then
 fi
 bsdtar -xf "$iso" -C "$tmp" "$initramfs_rel"
 lsinitcpio "$tmp/$initramfs_rel" > "$tmp/initramfs.list"
-if ! grep -q 'usr/share/plymouth/plymouthd.defaults' "$tmp/initramfs.list"; then
-  echo "HATA: Plymouth varsayılan yapılandırması initramfs içinde yok." >&2
-  echo "      initramfs: $initramfs_rel" >&2
-  exit 1
-fi
-echo "Plymouth varsayılan teması initramfs içinde doğrulandı."
+for f in etc/plymouth/plymouthd.conf \
+         usr/share/plymouth/themes/horos/horos.plymouth \
+         usr/share/plymouth/themes/horos/horos.script \
+         usr/share/plymouth/themes/horos/horos-mark.png; do
+  if ! grep -Fxq "$f" "$tmp/initramfs.list"; then
+    echo "HATA: Plymouth dosyası initramfs içinde yok: $f" >&2
+    echo "      initramfs: $initramfs_rel" >&2
+    exit 1
+  fi
+done
+echo "HorOS Plymouth teması ve seçimi initramfs içinde doğrulandı."
 
 echo
 echo "Tamamlandı: $iso"

@@ -726,7 +726,7 @@ for part in ("common", profile):
 
 # Kablosuz, ses ve GPU firmware'u her kuruluma gelir.
 # xdg-utils, HorOS kısayolundaki xdg-open çağrısının çalışması için gerekli.
-packages += ["linux-firmware", "xdg-utils"]
+packages += ["linux-firmware", "xdg-utils", "plymouth"]
 # Canlı ortamda algılanan donanıma göre sürücüler (NVIDIA, Broadcom, sanallaştırma...).
 packages += E.get("H_DRIVERS", "").split()
 
@@ -832,17 +832,44 @@ commands.append(
     "if [ -f /etc/default/grub ]; then mkdir -p /boot/grub; "
     "sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=\"HorOS\"/' /etc/default/grub; "
     "grep -q '^GRUB_DISTRIBUTOR=' /etc/default/grub || echo 'GRUB_DISTRIBUTOR=\"HorOS\"' >> /etc/default/grub; "
+    "grep -q 'GRUB_CMDLINE_LINUX_DEFAULT=.*splash' /etc/default/grub "
+    "|| sed -i -E 's/(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*)/\1 splash/' /etc/default/grub; "
     "grub-mkconfig -o /boot/grub/grub.cfg; "
     "sed -i -e 's#HorOS GNU/Linux#HorOS Linux#g' -e 's#Arch Linux#HorOS Linux#g' "
     "-e '/echo.*Loading Linux/d' -e '/echo.*Loading initial ramdisk/d' /boot/grub/grub.cfg; "
     "fi; true"
 )
-# systemd-boot (UEFI kurulumları): giriş başlıkları
+# systemd-boot (UEFI kurulumları): giriş başlıkları ve Plymouth için splash parametresi
 commands.append(
     "for f in /boot/loader/entries/*.conf; do "
     "[ -f \"$f\" ] && sed -i 's/^\\(title[[:space:]]\\+\\)Arch Linux/\\1HorOS Linux/' \"$f\"; "
+    "[ -f \"$f\" ] && grep -q '^options .*splash' \"$f\" "
+    "|| { [ -f \"$f\" ] && sed -i -E 's/^options(.*)/options\\1 splash/' \"$f\"; }; "
     "done; true"
 )
+
+# Açılış ekranı: HorOS'un kendi Plymouth temasını kurulan sisteme de kopyala, varsayılan yap.
+# plymouth hook'u mkinitcpio.conf içinde yoksa ekle ve initramfs'i yenile; böylece ilk açılışta
+# Arch logosu değil HorOS işareti görünür.
+ply_dir = "/usr/share/plymouth/themes/horos"
+ply_files = sorted(
+    p for p in glob.glob(os.path.join(ply_dir, "*"))
+    if os.path.isfile(p)
+)
+if ply_files:
+    theme_cmds = ["mkdir -p /etc/plymouth " + shlex.quote(ply_dir)]
+    theme_cmds += [write_cmd(p, p) for p in ply_files]
+    theme_cmds.append(
+        write_text("/etc/plymouth/plymouthd.conf", "[Daemon]\nTheme=horos\n")
+    )
+    theme_cmds.append(
+        "if [ -f /etc/mkinitcpio.conf ] "
+        "&& ! grep -Eq '^HOOKS=.*plymouth' /etc/mkinitcpio.conf; then "
+        "sed -i -E '/^HOOKS=/ s/([[:space:]])fsck([[:space:]]|$)/\\1plymouth fsck\\2/' /etc/mkinitcpio.conf; "
+        "fi; true"
+    )
+    theme_cmds.append("mkinitcpio -P >/dev/null 2>&1 || true")
+    commands += theme_cmds
 
 # Marka varlıkları: uygulama simgesi, HorOS project menü kategorisi ve duvar kağıtları.
 icon_src = "/usr/share/horos/branding/horos-icon.png"
