@@ -671,7 +671,7 @@ generate_config() { # $1: çıktı dosyası
   H_ESP_FS="$partial_esp_fs" \
   H_SWAP="$swap_on" H_SWAP_MIB="$swap_mib" H_DRIVERS="$driver_pkgs" \
   python3 - "$1" <<'PY'
-import base64, glob, json, os, shlex, sys, uuid
+import glob, json, os, shlex, shutil, sys, uuid
 
 E = os.environ
 out = sys.argv[1]
@@ -700,14 +700,33 @@ def read_list(p):
         return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
 
 
+# Dosyalari base64 olarak archinstall config'ine gommek yerine live sistemde
+# hazirlayip kurulum sonrasi hedef diske cp -a ile kopyaliyoruz. Boylece
+# archinstall'in "Executing custom command ..." logunda devasa base64 bloklari
+# akmıyor; config okunabilir kalıyor.
+STAGE = "/tmp/horos-branding"
+POST = "/tmp/horos-post-actions.sh"
+shutil.rmtree(STAGE, ignore_errors=True)
+os.makedirs(STAGE, exist_ok=True)
+post_actions = []
+
+
+def staged(dest):
+    return os.path.join(STAGE, dest.lstrip("/"))
+
+
 def write_cmd(src, dest, mode=None):
-    with open(src, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    d = shlex.quote(dest)
-    cmd = f"mkdir -p {shlex.quote(os.path.dirname(dest))} && echo {b64} | base64 -d > {d}"
+    p = staged(dest)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    shutil.copyfile(src, p)
     if mode:
-        cmd += f" && chmod {mode} {d}"
-    return cmd
+        os.chmod(p, int(mode, 8))
+    return ":"
+
+
+def add_post(cmd):
+    post_actions.append(cmd)
+    return ":"
 
 
 def file_commands(root):
@@ -757,8 +776,8 @@ for src in sorted(glob.glob("/etc/NetworkManager/system-connections/*")):
         commands.append(write_cmd(src, "/etc/NetworkManager/system-connections/" + os.path.basename(src), "600"))
 
 if "nftables" in packages:
-    commands.append(
-        "nft -c -f /etc/nftables.conf "
+    add_post(
+        "nft -c -f \"$HOROS_ROOT/etc/nftables.conf\" >/dev/null 2>&1 "
         "|| echo 'HorOS: UYARI: guvenlik duvari kurallari dogrulanamadi, /etc/nftables.conf dosyasini kontrol et'"
     )
 
@@ -814,8 +833,11 @@ else:
 # Marka: kurulan sistemde os-release/issue ve önyükleyici menüsü "HorOS Linux" yazar
 # (archinstall varsayılan olarak "Arch Linux" yazar). Hatalar kurulumu durdurmaz.
 def write_text(dest, text):
-    b64 = base64.b64encode(text.encode()).decode()
-    return f"echo {b64} | base64 -d > {shlex.quote(dest)}"
+    p = staged(dest)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+    return ":"
 
 
 osrel = ""
@@ -898,7 +920,7 @@ if os.path.isfile(icon_src):
                    "[Desktop Entry]\nType=Directory\nName=HorOS project\nIcon=horos\n"),
         write_text("/etc/xdg/menus/applications-merged/horos.menu", menu_xml),
     ]) + " || true")
-    commands.append("gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true")
+    add_post("gtk-update-icon-cache -f -t \"$HOROS_ROOT/usr/share/icons/hicolor\" >/dev/null 2>&1 || true")
 # /usr/share/backgrounds/horos icindeki tum gorselleri once hedef sisteme kopyalar,
 # sonra GNOME ve KDE'nin "Arka plan" secenek listelerine kaydeder. Kanonik dosyalar
 # olmadan XML'deki yollar bos onizlemeye yol acardi.
@@ -995,6 +1017,7 @@ if os.path.isfile(wall_src):
                      "picture-options='zoom'\n")
         + " && glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true"
     )
+    add_post("glib-compile-schemas \"$HOROS_ROOT/usr/share/glib-2.0/schemas\" >/dev/null 2>&1 || true")
     # KDE Plasma: yeni kullanıcıların masaüstü profiline HorOS duvar kağıdını yaz.
     plasma = ("[Containments][1]\nactivityId=\nformfactor=0\nimmutability=1\n"
               "plugin=org.kde.plasma.desktop\nwallpaperplugin=org.kde.image\n\n"
@@ -1011,6 +1034,10 @@ if os.path.isfile(wall_src):
             f"mkdir -p /home/{username}/.config && "
             + write_text(home_cfg, plasma)
             + f" && chown {shlex.quote(username)}:{shlex.quote(username)} {shlex.quote(home_cfg)} || true"
+        )
+        add_post(
+            "arch-chroot \"$HOROS_ROOT\" chown "
+            f"{shlex.quote(username)}:{shlex.quote(username)} {shlex.quote(home_cfg)} >/dev/null 2>&1 || true"
         )
 
 # AI-native varsayılan: limon tabanı her kuruluma gelir; extras yalnızca provider SDK'ları ekler.
@@ -1084,6 +1111,9 @@ else:
              part(1025, total_mib - 1025 - 1, "ext4", [], "/")]
     wipe = True
 
+# Sadece dosya yazan yer tutucu komutlar (":") logda goremeyelim.
+commands = [c for c in commands if c.strip() != ":"]
+
 config = {
     # Eski şema ("bootloader") ve yeni şema ("bootloader_config"): archinstall bilmediğini yok sayar.
     "bootloader": "Grub",
@@ -1101,7 +1131,65 @@ config = {
 fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
+
+# Dosya kopyalandiktan sonra chroot icinde calistirilacak kucuk islemler.
+with open(POST, "w", encoding="utf-8") as f:
+    f.write("#!/bin/bash\nset -u\n" + "\n".join(post_actions) + "\n")
+os.chmod(POST, 0o755)
 PY
+}
+
+# Marka dosyalarini archinstall config'ine base64 olarak gommek yerine live
+# sistemde hazirladik; kurulum bitince kok bolumu yazilabilir baglayip cp -a ile
+# hedef sisteme kopyalariz. Boylece kurulum logunda base64 yigitlari akmz.
+apply_branding() {
+  local staging="/tmp/horos-branding" post="/tmp/horos-post-actions.sh"
+  local m p root="" rc=0 attempt
+  local parts=()
+  [[ -d "$staging" ]] || { rm -f "$post"; return 0; }
+
+  echo
+  echo "HorOS marka dosyalari yerlestiriliyor..."
+  swapoff -a 2>/dev/null || true
+  udevadm settle 2>/dev/null || true
+  umount -R /mnt 2>/dev/null || true
+
+  mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
+  m="$(mktemp -d /tmp/horos-brand.XXXXXX)"
+  for p in "${parts[@]}"; do
+    mount -o ro "$p" "$m" 2>/dev/null || continue
+    if [[ -f "$m/etc/fstab" && -d "$m/usr" ]]; then root="$p"; fi
+    umount "$m" 2>/dev/null || true
+    [[ -n "$root" ]] && break
+  done
+  if [[ -z "$root" ]]; then
+    echo "${R}UYARI:${N} kok bolum bulunamadi, marka dosyalari kopyalanamadi."
+    rmdir "$m" 2>/dev/null || true
+    rm -rf "$staging" "$post"
+    return 1
+  fi
+
+  for attempt in 1 2 3; do
+    umount -R "$m" 2>/dev/null || true
+    if mount -o rw "$root" "$m" 2>/dev/null; then rc=0; break; fi
+    rc=1; sleep 1
+  done
+  if (( rc != 0 )); then
+    echo "${R}UYARI:${N} kok bolum ($root) yazilabilir baglanamadi."
+    rmdir "$m" 2>/dev/null || true
+    rm -rf "$staging" "$post"
+    return 1
+  fi
+
+  cp -a "$staging/." "$m/" || rc=1
+  if [[ -f "$post" ]]; then
+    HOROS_ROOT="$m" bash "$post" || true
+  fi
+  umount "$m" 2>/dev/null || rc=1
+  rmdir "$m" 2>/dev/null || true
+  rm -rf "$staging" "$post"
+  (( rc == 0 )) && echo "${G}Marka dosyalari kuruldu.${N}"
+  return "$rc"
 }
 
 # Kurulum bitince diski salt-okunur bağlayıp çekirdek, initramfs ve önyükleyici dosyalarını arar.
@@ -1248,6 +1336,9 @@ begin_install() {
   local rc=0
   archinstall --config "$cfg" --silent || rc=$?
   rm -f "$cfg"
+  if (( rc == 0 )); then
+    apply_branding || rc=4
+  fi
   if (( rc == 0 )); then
     echo
     verify_boot || rc=3
