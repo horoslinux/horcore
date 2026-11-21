@@ -156,7 +156,7 @@ The live medium probes the hardware before the installer opens (`lspci`/`lsusb` 
 
 - HorOS app icon: `airootfs/usr/share/horos/branding/horos-icon.png`. It is installed as `/usr/share/pixmaps/horos.png`, `/usr/share/icons/hicolor/512x512/apps/horos.png` and a `horos.desktop` launcher that opens `https://horoslinux.github.io` with `xdg-open`. `xdg-utils` is always installed and desktop profiles also get Firefox, so the shortcut actually works. The launcher is grouped under a Freedesktop menu category named **HorOS project** via `/usr/share/desktop-directories/horos-project.directory` and `/etc/xdg/menus/applications-merged/horos.menu`.
 - Wallpapers: curated JPEGs in `airootfs/usr/share/backgrounds/horos/` (`horos-wallpaper-NN.jpg` plus any extra favourites). The old generated `horos-wallpaper.png` was removed; the first `horos-wallpaper-NN.jpg` is used as the default. GNOME gets a system-wide `gschema.override`; KDE Plasma users get the same default in `/etc/skel` and the newly created home.
-- The icon and Plymouth splash mark are generated from the logo with `python3 tools/generate-branding.py` (requires Pillow only for regeneration); wallpapers are curated JPEGs and are not generated.
+- The icon is a committed PNG asset; wallpapers are curated JPEGs. There is no generator script.
 
 ### Other presets
 
@@ -205,6 +205,6 @@ HorOS branding disables it cleanly: the `message=` line in `/etc/grub.d/10_linux
 - Installer autostart on tty1: `airootfs/etc/systemd/system/getty@tty1.service.d/10-horos.conf`
 - Boot menu: `syslinux/` (BIOS), `efiboot/` (UEFI)
 - Default Arch Plymouth boot screen: `plymouth` in `packages.x86_64`, `quiet splash` in `syslinux/archiso_sys-linux.cfg`; custom theme files under `airootfs/usr/share/plymouth/themes/horos/` are unused branding sources
-- Icon source: `airootfs/usr/share/horos/branding/` (regenerate with `tools/generate-branding.py`). Wallpapers are curated JPEGs in `airootfs/usr/share/backgrounds/horos/`; the generated `horos-wallpaper.png` and its generator step were removed.
+- Icon asset: `airootfs/usr/share/horos/branding/horos-icon.png`. Wallpapers are curated JPEGs in `airootfs/usr/share/backgrounds/horos/`; the generated `horos-wallpaper.png` was removed.
 - The installer copies **every image** in `/usr/share/backgrounds/horos/` into the installed system, registers them with GNOME (`/usr/share/gnome-background-properties/horos.xml`) and KDE Plasma (`/usr/share/wallpapers/horos…/` KPackage folders containing symlinks to the canonical files), and uses the first `horos-wallpaper-NN.jpg` as the default. Files are named `horos-wallpaper-NN.jpg`; extra favourites are accepted under any name.
 - Hardware driver rules and swapfile: `airootfs/usr/local/bin/horos-installer`

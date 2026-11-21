@@ -60,7 +60,7 @@ BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
 WALLPAPER_DIR="$ROOT/airootfs/usr/share/backgrounds/horos"
 if [[ ! -f "$BRAND_ICON" ]]; then
   echo "HATA: Marka dosyası eksik: $BRAND_ICON" >&2
-  echo "      Yeniden üret: python3 tools/generate-branding.py" >&2
+  echo "      Dosyayı airootfs/usr/share/horos/branding/ altına koy." >&2
   exit 1
 fi
 if ! compgen -G "$WALLPAPER_DIR/*.jpg" >/dev/null; then
