@@ -1019,7 +1019,9 @@ if os.path.isfile(wall_src):
     )
     add_post("glib-compile-schemas \"$HOROS_ROOT/usr/share/glib-2.0/schemas\" >/dev/null 2>&1 || true")
     # KDE Plasma: yeni kullanıcıların masaüstü profiline HorOS duvar kağıdını yaz.
-    plasma = ("[Containments][1]\nactivityId=\nformfactor=0\nimmutability=1\n"
+    # immutability=1 masaustu kilitler; kullanici duvar kagidi/panel degisikligi
+    # yapamaz. 0 = kullanici degistirebilir (varsayilan HorOS duvar kagidi yine gelir).
+    plasma = ("[Containments][1]\nactivityId=\nformfactor=0\nimmutability=0\n"
               "plugin=org.kde.plasma.desktop\nwallpaperplugin=org.kde.image\n\n"
               "[Containments][1][Wallpaper][org.kde.image][General]\n"
               f"Image=file://{wall_dest}\n")
@@ -1035,9 +1037,12 @@ if os.path.isfile(wall_src):
             + write_text(home_cfg, plasma)
             + f" && chown {shlex.quote(username)}:{shlex.quote(username)} {shlex.quote(home_cfg)} || true"
         )
+        # cp -a ile kopyalanan ~/.config root:root kalir; kullanici oraya yazamadigi
+        # icin GNOME/KDE ayarlari reboot'ta kayboluyor. Tüm ev dizinini kullanicinin
+        # yapmaliyiz (sadece plasma dosyasi degil).
         add_post(
-            "arch-chroot \"$HOROS_ROOT\" chown "
-            f"{shlex.quote(username)}:{shlex.quote(username)} {shlex.quote(home_cfg)} >/dev/null 2>&1 || true"
+            "arch-chroot \"$HOROS_ROOT\" chown -R "
+            f"{shlex.quote(username)}:{shlex.quote(username)} /home/{shlex.quote(username)} >/dev/null 2>&1 || true"
         )
 
 # AI-native varsayılan: limon tabanı her kuruluma gelir; extras yalnızca provider SDK'ları ekler.
