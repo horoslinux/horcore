@@ -17,6 +17,9 @@ Y=$'\e[1;33m'; R=$'\e[1;31m'; G=$'\e[1;32m'; D=$'\e[2m'; N=$'\e[0m'
 kb=us; timezone=UTC; tz_src="varsayılan"; country=""
 profile=""; extras=""; desktop=""
 disk=""; disk_bytes=0; disk_sec=512
+# Kurulum modu: "full" = tüm diski sil; "partial" = mevcut bölümleri koru, boş alana kur.
+disk_mode="full"; partial_start=0; partial_size=0
+partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
 hostname_v="horos"; net_state="denetleniyor..."
 root_hash=""; username=""; user_hash=""; user_admin=1
 PW_HASH=""
@@ -359,28 +362,114 @@ PY
 
 human_size() { python3 -c "import sys;b=int(sys.argv[1]);print(f'{b/1e9:.0f} GB' if b<1e12 else f'{b/1e12:.1f} TB')" "$1"; }
 
+# Kısmi kurulum için en büyük boş alanı ve varsa EFI/boot bölümünü bulur.
+# Çıktı: start_mib \t size_mib \t esp_dev \t esp_start \t esp_size \t esp_fs
+find_partial_plan() { # $1 disk, $2 istenen MiB
+  python3 - "$1" "$2" <<'PY'
+import json, math, re, subprocess, sys
+
+disk, want = sys.argv[1], int(sys.argv[2])
+try:
+    out = subprocess.run(["parted", "-jsm", disk, "unit", "MiB", "print", "free"],
+                         capture_output=True, text=True, check=True)
+    parts = json.loads(out.stdout).get("partitions", [])
+except Exception:
+    sys.exit(1)
+
+def mib(value):
+    nums = re.findall(r"-?\d+(?:\.\d+)?", str(value))
+    return float(nums[0]) if nums else 0.0
+
+free = []
+for p in parts:
+    if str(p.get("type", "")).lower() != "free":
+        continue
+    start = math.ceil(mib(p.get("start")))
+    end = math.floor(mib(p.get("end")))
+    if end - start >= 8192:
+        free.append((end - start, start))
+if not free:
+    sys.exit(2)
+size, start = max(free)
+size = min(size, want)
+if size < 8192:
+    sys.exit(3)
+
+def path(number):
+    # /dev/nvme0n1 -> /dev/nvme0n1p7 ; /dev/sda -> /dev/sda7
+    return f"{disk}p{number}" if disk[-1].isdigit() else f"{disk}{number}"
+
+esp = esp_start = esp_size = 0
+esp_fs = "fat32"
+for p in parts:
+    if str(p.get("type", "")).lower() == "free":
+        continue
+    flags = [str(f).lower() for f in (p.get("flags") or [])]
+    fs = str(p.get("fs_type") or "fat32").lower().replace("vfat", "fat32")
+    if "esp" in flags or ("boot" in flags and fs.startswith("fat")):
+        number = p.get("number")
+        if number:
+            esp = path(str(number))
+            esp_start = math.ceil(mib(p.get("start")))
+            esp_size = math.floor(mib(p.get("size")))
+            esp_fs = fs
+        break
+
+print(start, size, esp, esp_start, esp_size, esp_fs, sep="\t")
+PY
+}
+
 set_disk() {
-  local lines=() l i=0 pc name size model sec
+  local lines=() l i=0 pc name size model sec pm psz plan=""
   mapfile -t lines < <(list_disks)
   if (( ${#lines[@]} == 0 )); then
     echo; echo "Kurulabilecek disk bulunamadı."; pause 2; return 0
   fi
   echo
-  echo "Kurulum hedefi — ${R}seçilen diskteki TÜM veriler silinir${N} (otomatik bölümleme)."
+  echo "Kurulum hedefi — disk seçildikten sonra bölümleme yöntemini soracağım."
   for l in "${lines[@]}"; do
     i=$((i + 1))
     IFS=$'\t' read -r name size model sec <<<"$l"
     printf '  %d) %s  %s  %s\n' "$i" "$name" "$(human_size "$size")" "$model"
   done
   read -rp "Seçim [1-${#lines[@]}]: " pc || return 0
-  if [[ "$pc" =~ ^[0-9]+$ ]] && (( 10#$pc >= 1 && 10#$pc <= ${#lines[@]} )); then
-    IFS=$'\t' read -r name size model sec <<<"${lines[10#$pc - 1]}"
-    if (( size < 8 * 1024 * 1024 * 1024 )); then
-      echo "Disk çok küçük (en az 8 GB gerekir)."; pause 2; return 0
+  if [[ ! "$pc" =~ ^[0-9]+$ ]] || (( 10#$pc < 1 || 10#$pc > ${#lines[@]} )); then
+    echo "Geçersiz seçim."; pause; return 0
+  fi
+  IFS=$'\t' read -r name size model sec <<<"${lines[10#$pc - 1]}"
+  if (( size < 8 * 1024 * 1024 * 1024 )); then
+    echo "Disk çok küçük (en az 8 GB gerekir)."; pause 2; return 0
+  fi
+  disk="$name"; disk_bytes="$size"; disk_sec="$sec"
+
+  echo
+  echo "Bölümleme yöntemi:"
+  echo "  1) Tüm diski sil ve otomatik bölümlendir (eski yöntem)"
+  echo "  2) Mevcut bölümleri koru, boş alana kur (çift sistem / veri korunur)"
+  read -rp "Seçim [1-2]: " pm || pm=1
+  if [[ "$pm" == "2" ]]; then
+    read -rp "Ayrılacak alan MiB [102400 = 100 GiB]: " psz || psz=""
+    [[ -z "$psz" ]] && psz=102400
+    if [[ ! "$psz" =~ ^[0-9]+$ ]] || (( psz < 8192 )); then
+      echo "Geçersiz boyut (en az 8192 MiB)."; pause 2; return 0
     fi
-    disk="$name"; disk_bytes="$size"; disk_sec="$sec"
+    if ! plan="$(find_partial_plan "$disk" "$psz")"; then
+      echo "${R}Yeterli boş alan bulunamadı.${N} Diski Windows'tan küçültüp boş alan oluştur."
+      pause 3; return 0
+    fi
+    IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
+    disk_mode="partial"
+    echo "${G}Plan:${N} $partial_start MiB konumundan $partial_size MiB alan kullanılacak."
+    if [[ -n "$partial_esp" ]]; then
+      echo "Mevcut EFI/boot bölümü yeniden kullanılacak: $partial_esp"
+    else
+      echo "Yeni EFI/boot bölümü bu alanın içine oluşturulacak."
+    fi
+    pause 2
   else
-    echo "Geçersiz seçim."; pause
+    disk_mode="full"
+    partial_start=0; partial_size=0; partial_esp=""
+    partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
   fi
 }
 
@@ -467,7 +556,12 @@ admin_ok() { [[ -n "$root_hash" ]] || { [[ -n "$username" ]] && (( user_admin ==
 
 show_hub() {
   local disk_v user_v root_v warn_d="" warn_u="" warn_n=""
-  if [[ -n "$disk" ]]; then disk_v="$disk ($(human_size "$disk_bytes")) — otomatik bölümleme"
+  if [[ -n "$disk" ]]; then
+    if [[ "$disk_mode" == "partial" ]]; then
+      disk_v="$disk ($(human_size "$disk_bytes")) — ${partial_size} MiB alan, mevcut bölümler korunur"
+    else
+      disk_v="$disk ($(human_size "$disk_bytes")) — tüm disk silinir"
+    fi
   else disk_v="seçilmedi"; warn_d="(!) tamamlanmalı"; fi
   if [[ -n "$username" ]]; then user_v="$username$( ((user_admin)) && echo ' (yönetici)' )"
   else user_v="oluşturulmadı"; fi
@@ -566,6 +660,9 @@ generate_config() { # $1: çıktı dosyası
   H_TZ="$timezone" H_KB="$kb" H_HOST="$hostname_v" H_DISK="$disk" H_BYTES="$disk_bytes" \
   H_SEC="$disk_sec" H_EFI="$efi" H_WIFI="$wifi" H_USER="$username" H_USERHASH="$user_hash" \
   H_ADMIN="$user_admin" H_ROOTHASH="$root_hash" \
+  H_MODE="$disk_mode" H_PART_START="$partial_start" H_PART_SIZE="$partial_size" \
+  H_ESP_DEV="$partial_esp" H_ESP_START="$partial_esp_start" H_ESP_SIZE="$partial_esp_size" \
+  H_ESP_FS="$partial_esp_fs" \
   H_SWAP="$swap_on" H_SWAP_MIB="$swap_mib" H_DRIVERS="$driver_pkgs" \
   python3 - "$1" <<'PY'
 import base64, glob, json, os, shlex, sys, uuid
@@ -578,6 +675,16 @@ username, user_hash, admin = E["H_USER"], E["H_USERHASH"], E["H_ADMIN"] == "1"
 root_hash = E["H_ROOTHASH"]
 swap_on = E["H_SWAP"] == "1"
 swap_mib = int(E["H_SWAP_MIB"] or 0)
+
+mode = E.get("H_MODE", "full")
+part_start = int(E.get("H_PART_START") or 0)
+part_size = int(E.get("H_PART_SIZE") or 0)
+esp_dev = E.get("H_ESP_DEV", "")
+esp_start = int(E.get("H_ESP_START") or 0)
+esp_size = int(E.get("H_ESP_SIZE") or 0)
+esp_fs = E.get("H_ESP_FS") or "fat32"
+if esp_fs not in ("fat32", "fat16"):
+    esp_fs = "fat32"
 
 
 def read_list(p):
@@ -929,8 +1036,8 @@ if username:
     commands.append(limon_install(f"/home/{username}", username, username))
 
 # Disk düzeni: UEFI için ESP + ext4 kök; BIOS için FAT32 /boot (boot bayraklı) + ext4 kök.
-# archinstall her oluşturduğu bölümde dosya sistemi bekler; BIOS'ta da önyükleyici bölümü şarttır.
-# Tüm disk silinir.
+# "full" modu diski tamamen siler. "partial" modu mevcut bölümleri korur ve yalnızca
+# seçilen boş alanda yeni bölümler oluşturur (çift sistem / veri korunur).
 sec = int(E["H_SEC"])
 total_mib = int(E["H_BYTES"]) // (1024 * 1024)
 
@@ -938,20 +1045,35 @@ def size_of(mib):
     return {"sector_size": {"unit": "B", "value": sec}, "unit": "MiB", "value": mib}
 
 
-def part(start, size, fs, flags, mount):
+def part(start, size, fs, flags, mount, status="create", dev=None):
     return {
-        "btrfs": [], "dev_path": None, "flags": flags, "fs_type": fs, "mount_options": [],
+        "btrfs": [], "dev_path": dev, "flags": flags, "fs_type": fs, "mount_options": [],
         "mountpoint": mount, "obj_id": str(uuid.uuid4()), "size": size_of(size),
-        "start": size_of(start), "status": "create", "type": "primary",
+        "start": size_of(start), "status": status, "type": "primary",
     }
 
 
-if efi:
+if mode == "partial" and part_size >= 8192 and part_start >= 1:
+    parts = []
+    boot_flags = ["boot", "esp"] if efi else ["boot"]
+    if esp_dev:
+        # Var olan EFI/boot bölümü formatlanmadan bağlanır; Windows boot dosyaları korunur.
+        parts.append(part(esp_start, esp_size, esp_fs, boot_flags, "/boot", "existing", esp_dev))
+        root_start, root_size = part_start, part_size
+    else:
+        boot_size = 512 if efi else 1024
+        parts.append(part(part_start, boot_size, "fat32", boot_flags, "/boot"))
+        root_start, root_size = part_start + boot_size, part_size - boot_size - 1
+    parts.append(part(root_start, root_size, "ext4", [], "/"))
+    wipe = False
+elif efi:
     parts = [part(1, 512, "fat32", ["boot", "esp"], "/boot"),
              part(513, total_mib - 513 - 1, "ext4", [], "/")]
+    wipe = True
 else:
     parts = [part(1, 1024, "fat32", ["boot"], "/boot"),
              part(1025, total_mib - 1025 - 1, "ext4", [], "/")]
+    wipe = True
 
 config = {
     # Eski şema ("bootloader") ve yeni şema ("bootloader_config"): archinstall bilmediğini yok sayar.
@@ -964,7 +1086,7 @@ config = {
     "locale_config": {"kb_layout": E["H_KB"], "sys_lang": "en_US", "sys_enc": "UTF-8"},
     "disk_config": {
         "config_type": "default_layout",
-        "device_modifications": [{"device": E["H_DISK"], "partitions": parts, "wipe": True}],
+        "device_modifications": [{"device": E["H_DISK"], "partitions": parts, "wipe": wipe}],
     },
 }
 fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -988,10 +1110,30 @@ verify_boot() {
   if (( ${#parts[@]} < 2 )); then
     echo "${R}UYARI:${N} $disk üzerinde beklenen bölümler bulunamadı."; return 1
   fi
-  # İlk bölüm her iki düzende de /boot (UEFI'de ESP, BIOS'ta FAT32 boot).
-  boot="${parts[0]}"; root="${parts[-1]}"
   m="$(mktemp -d /tmp/horos-verify.XXXXXX)"
   mount_err="$(mktemp /tmp/horos-verify-mount.XXXXXX)"
+
+  if [[ "$disk_mode" == "partial" ]]; then
+    # Kısmi kurulumda bölüm sırası değişir; kökü ve boot'u içeriğinden bul.
+    local p candidate=""
+    for p in "${parts[@]}"; do
+      mount -o ro "$p" "$m" 2>/dev/null || continue
+      if [[ -d "$m/EFI" || -f "$m/grub/grub.cfg" ]]; then candidate="$p"; fi
+      umount "$m" 2>/dev/null || true
+    done
+    boot="$candidate"
+    root=""
+    for p in "${parts[@]}"; do
+      mount -o ro "$p" "$m" 2>/dev/null || continue
+      if [[ -f "$m/etc/fstab" && -d "$m/usr" ]]; then root="$p"; fi
+      umount "$m" 2>/dev/null || true
+    done
+    [[ -z "$root" ]] && root="${parts[-1]}"
+    [[ -z "$boot" ]] && boot="$root"
+  else
+    # Tam disk modunda ilk bölüm /boot, son bölüm kök.
+    boot="${parts[0]}"; root="${parts[-1]}"
+  fi
 
   # Bölüm tablosu/udev birkaç saniye gecikebiliyor; kısa bir retry yeterli.
   rc=1
@@ -1007,6 +1149,7 @@ verify_boot() {
     return 1
   fi
 
+  mkdir -p "$m/boot"
   mount -o ro "$boot" "$m/boot" 2>/dev/null || problems+=("boot bölümü ($boot) bağlanamadı")
   [[ -s "$m/boot/vmlinuz-linux" ]]        || problems+=("çekirdek yok (/boot/vmlinuz-linux)")
   [[ -s "$m/boot/initramfs-linux.img" ]]  || problems+=("initramfs yok (/boot/initramfs-linux.img)")
@@ -1056,7 +1199,11 @@ begin_install() {
   echo "${Y}Kurulacak sistem${N}"
   echo "  Profil      : $(profile_title "$profile")"
   echo "  Masaüstü    : $(desktop_label)"
-  echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${R}TÜM VERİLER SİLİNECEK${N}"
+  if [[ "$disk_mode" == "partial" ]]; then
+    echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${G}${partial_size} MiB alan, mevcut bölümler korunur${N}"
+  else
+    echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${R}TÜM VERİLER SİLİNECEK${N}"
+  fi
   echo "  Takas       : $(swap_label)"
   echo "  Sürücüler   : $driver_note"
   echo "  Önyükleme   : $([[ -d /sys/firmware/efi ]] && echo UEFI || echo BIOS)"
