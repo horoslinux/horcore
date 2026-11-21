@@ -420,7 +420,7 @@ PY
 }
 
 set_disk() {
-  local lines=() l i=0 pc name size model sec pm psz plan=""
+  local lines=() l i=0 pc name size model sec pm psz psz_gb plan=""
   mapfile -t lines < <(list_disks)
   if (( ${#lines[@]} == 0 )); then
     echo; echo "Kurulabilecek disk bulunamadı."; pause 2; return 0
@@ -448,18 +448,24 @@ set_disk() {
   echo "  2) Mevcut bölümleri koru, boş alana kur (çift sistem / veri korunur)"
   read -rp "Seçim [1-2]: " pm || pm=1
   if [[ "$pm" == "2" ]]; then
-    read -rp "Ayrılacak alan MiB [102400 = 100 GiB]: " psz || psz=""
-    [[ -z "$psz" ]] && psz=102400
-    if [[ ! "$psz" =~ ^[0-9]+$ ]] || (( psz < 8192 )); then
-      echo "Geçersiz boyut (en az 8192 MiB)."; pause 2; return 0
+    # Kullanıcı GB girer; archinstall MiB bekler. 20 / 20G / 20GB aynı anlam.
+    read -rp "Ayrılacak alan GB [100]: " psz || psz=""
+    [[ -z "$psz" ]] && psz="100"
+    psz_gb="${psz^^}"
+    psz_gb="${psz_gb%GIB}"
+    psz_gb="${psz_gb%GB}"
+    psz_gb="${psz_gb%G}"
+    if [[ ! "$psz_gb" =~ ^[0-9]+$ ]] || (( 10#$psz_gb < 8 )); then
+      echo "Geçersiz boyut (en az 8 GB; örn. 20, 20G veya 100GB)."; pause 2; return 0
     fi
+    psz=$(( 10#$psz_gb * 1024 ))   # MiB
     if ! plan="$(find_partial_plan "$disk" "$psz")"; then
       echo "${R}Yeterli boş alan bulunamadı.${N} Diski Windows'tan küçültüp boş alan oluştur."
       pause 3; return 0
     fi
     IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
     disk_mode="partial"
-    echo "${G}Plan:${N} $partial_start MiB konumundan $partial_size MiB alan kullanılacak."
+    echo "${G}Plan:${N} $partial_start MiB konumundan $partial_size MiB ($(( partial_size / 1024 )) GB) alan kullanılacak."
     if [[ -n "$partial_esp" ]]; then
       echo "Mevcut EFI/boot bölümü yeniden kullanılacak: $partial_esp"
     else
