@@ -228,6 +228,24 @@ forget_mount() {
   MOUNT_DIRS=("${keep[@]:-}")
 }
 
+# archinstall hedefi her zaman /mnt olarak varsayar. Önceki denemeden kalan
+# swapfile veya mountlar orayi meşgul ederse archinstall "target is busy" ile
+# çöker. Swap'i önce kapat, sonra mount'u birkaç kez dene, son çare lazy umount.
+release_target() {
+  local attempt
+  for attempt in 1 2 3; do
+    swapoff -a 2>/dev/null || true
+    if ! mountpoint -q /mnt && ! findmnt -rn -o TARGET /mnt 2>/dev/null | grep -q .; then
+      return 0
+    fi
+    umount -R /mnt 2>/dev/null && return 0
+    sleep 1
+    umount -R /mnt 2>/dev/null && return 0
+    umount -Rl /mnt 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # Ağ + konum tespiti arka planda çalışır; ekran beklemeden açılır, sonuç gelince özet güncellenir.
 start_detect() {
   DETECT_DIR="$(mktemp -d /tmp/horos-detect.XXXXXX)"
@@ -1227,9 +1245,8 @@ apply_branding() {
 
   echo
   echo "HorOS marka dosyalari yerlestiriliyor..."
-  swapoff -a 2>/dev/null || true
   udevadm settle 2>/dev/null || true
-  umount -R /mnt 2>/dev/null || true
+  release_target || true
 
   mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
   m="$(mktemp -d /tmp/horos-brand.XXXXXX)"
@@ -1305,10 +1322,9 @@ verify_boot() {
   is_efi && efi=1
 
   # archinstall'in chroot'unda açılan swapfile live ortamda hâlâ aktif kalabilir.
-  # Bu, /mnt'in tamamen kapanmasını ve kökün başka yere ro mount edilmesini engeller.
-  swapoff -a 2>/dev/null || true
+  # Swap'i önce kapatıp /mnt'i güvenle boşaltıyoruz (ayrıntı: release_target).
   udevadm settle 2>/dev/null || true
-  umount -R /mnt 2>/dev/null || true
+  release_target || true
 
   mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
   if (( ${#parts[@]} < 2 )); then
@@ -1466,8 +1482,13 @@ begin_install() {
     BRAND_STAGE=""; BRAND_POST=""
     return 1
   }
-  umount -R /mnt 2>/dev/null || true
-  swapoff -a 2>/dev/null || true
+  if ! release_target; then
+    echo "${R}HATA:${N} /mnt kapatılamadı; archinstall hedefi kullanamaz." >&2
+    findmnt -R /mnt 2>/dev/null || true
+    rm -rf "$BRAND_STAGE"; rm -f "$BRAND_POST" "$BRAND_META" "$CFG"
+    BRAND_STAGE=""; BRAND_POST=""; BRAND_META=""; CFG=""
+    return 1
+  fi
 
   echo
   echo "Kurulum başlıyor..."
