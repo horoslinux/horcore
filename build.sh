@@ -28,10 +28,17 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-if ! command -v mkarchiso >/dev/null; then
-  echo "mkarchiso bulunamadı. Kur: pacman -S archiso" >&2
-  exit 1
-fi
+for tool in mkarchiso bsdtar lsinitcpio; do
+  if ! command -v "$tool" >/dev/null; then
+    case "$tool" in
+      mkarchiso) pkg=archiso ;;
+      bsdtar)    pkg=libarchive ;;
+      lsinitcpio) pkg=mkinitcpio ;;
+    esac
+    echo "$tool bulunamadı. Kur: pacman -S $pkg" >&2
+    exit 1
+  fi
+done
 
 # Zip/Windows/git bazı sembolik linkleri 0 baytlık dosyaya çevirebilir.
 # Servis linklerini her build'de yeniden, doğru şekilde oluştur.
@@ -47,12 +54,29 @@ chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
 
 # Plymouth teması initramfs'e gireceği için kaynakta eksiksiz olmalı.
 THEME_DIR="$ROOT/airootfs/usr/share/plymouth/themes/horos"
-for f in horos.plymouth horos.script logo.png seg.png track.png; do
+for f in horos.plymouth horos.script logo.png horos-mark.png seg.png; do
   if [[ ! -f "$THEME_DIR/$f" ]]; then
     echo "HATA: Plymouth teması eksik: $THEME_DIR/$f" >&2
     exit 1
   fi
 done
+
+# Marka varlıkları (kurulan sisteme de kopyalanır).
+BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
+WALLPAPER="$ROOT/airootfs/usr/share/backgrounds/horos/horos-wallpaper.png"
+for f in "$BRAND_ICON" "$WALLPAPER"; do
+  if [[ ! -f "$f" ]]; then
+    echo "HATA: Marka dosyası eksik: $f" >&2
+    echo "      Yeniden üret: python3 tools/generate-branding.py" >&2
+    exit 1
+  fi
+done
+
+# Simgeyi canlı sistemde de görünür yap (hicolor / pixmaps).
+ICON_DIR="$ROOT/airootfs/usr/share/icons/hicolor/512x512/apps"
+mkdir -p "$ICON_DIR" "$ROOT/airootfs/usr/share/pixmaps"
+ln -sfn /usr/share/horos/branding/horos-icon.png "$ICON_DIR/horos.png"
+ln -sfn /usr/share/horos/branding/horos-icon.png "$ROOT/airootfs/usr/share/pixmaps/horos.png"
 
 # mkarchiso work/ içindeki adımları önbelleğe alır ve profil değişikliklerini
 # sessizce atlayabilir. Varsayılan olarak temiz başla; --keep ile koru.

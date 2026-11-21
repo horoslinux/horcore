@@ -1,0 +1,9 @@
+# mkarchiso çıktıları (büyük dosyalar)
+/out/
+/work/
+*.iso
+*.iso.sha256
+
+# derleme günlükleri
+build*.log
+build.rc

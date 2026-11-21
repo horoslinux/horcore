@@ -1,48 +1,49 @@
-Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundTopColor(0.02, 0.02, 0.03);
 Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 
 sw = Window.GetWidth();
 sh = Window.GetHeight();
+pi = 3.14159265;
 
-# Logo
-logo.image = Image("logo.png");
+# Sıkı kırpılmış, şeffaf HorOS işareti (eski 500x500'luk koyu kutu kaldırıldı).
+logo.image = Image("horos-mark.png");
 logo.sprite = Sprite(logo.image);
-logo.sprite.SetX(sw / 2 - logo.image.GetWidth() / 2);
-logo.sprite.SetY(sh / 2 - logo.image.GetHeight() / 2 - 30);
+logo.sprite.SetX((sw - logo.image.GetWidth()) / 2);
+logo.sprite.SetY((sh - logo.image.GetHeight()) / 2 - 46);
 
-# Yükleme çubuğu
-bar_w = 260;
-bar_h = 4;
-seg_w = 90;
-bar_x = sw / 2 - bar_w / 2;
-bar_y = sh / 2 + logo.image.GetHeight() / 2 + 10;
+# Dairesel dönen çubuk: halka boyunca dizilmiş kısa çubuklar, arkada sönük iz.
+count = 16;
+radius = 48;
+cx = sw / 2;
+cy = sh / 2 + logo.image.GetHeight() / 2 - 46 + radius + 26;
+segment.image = Image("seg.png").Scale(14, 6);
 
-# Koyu gri arka iz
-track.image = Image("track.png").Scale(bar_w, bar_h);
-track.sprite = Sprite(track.image);
-track.sprite.SetPosition(bar_x, bar_y, 1);
-
-# Accent: #FDC41D
-seg.image = Image("seg.png").Scale(seg_w, bar_h);
-seg.sprite = Sprite(seg.image);
-seg.sprite.SetPosition(bar_x, bar_y, 2);
+for (i = 0; i < count; i++) {
+  angle = 2 * pi * i / count;
+  rotated = segment.image.Rotate(angle + pi / 2);
+  segments[i] = Sprite(rotated);
+  x = cx + radius * Math.Cos(angle) - rotated.GetWidth() / 2;
+  y = cy + radius * Math.Sin(angle) - rotated.GetHeight() / 2;
+  segments[i].SetPosition(x, y, 2);
+}
 
 frame = 0;
-dir = 1;
-steps = 60;
+tick = 0;
 
 fun refresh_callback() {
-  frame += dir;
-
-  if (frame >= steps) dir = -1;
-  if (frame <= 0) dir = 1;
-
-  p = frame / steps;
-
-  # Smooth ease-in-out
-  e = p * p * (3 - 2 * p);
-
-  seg.sprite.SetX(bar_x + e * (bar_w - seg_w));
+  tick = tick + 1;
+  if (tick >= 2) {
+    tick = 0;
+    frame = frame + 1;
+    if (frame >= count) frame = 0;
+  }
+  for (i = 0; i < count; i++) {
+    behind = frame - i;
+    if (behind < 0) behind = behind + count;
+    opacity = 0.22;
+    if (behind < 8) opacity = 1.0 - behind * 0.10;
+    segments[i].SetOpacity(opacity);
+  }
 }
 
 Plymouth.SetRefreshFunction(refresh_callback);

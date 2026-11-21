@@ -20,6 +20,10 @@ hwdata
 # Yükleme ekranı
 plymouth
 
+# Donanım algılama (sürücü seçimi için lspci/lsusb)
+pciutils
+usbutils
+
 # Network and terminal tools
 networkmanager
 wpa_supplicant
