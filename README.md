@@ -11,7 +11,7 @@ HorOS is 64-bit only (no 32-bit/x86 support).
 | CPU | x86_64 with SSE2, 1 GHz | 2 cores, 2 GHz or faster |
 | RAM (live installer) | 1 GB (Server), 2 GB (KDE/GNOME) | 4 GB |
 | RAM (installed system) | 2 GB (Server), 4 GB (desktop) | 8 GB |
-| Disk | 10 GB (Server), 20 GB (Workstation) | 40 GB SSD |
+| Disk | 8 GB (tüm profiller) | 40 GB SSD |
 | USB medium | 4 GB | 8 GB |
 | Network | Internet connection **required** during installation | Wired connection |
 | Firmware | BIOS (legacy/MBR) or 64-bit UEFI | UEFI |

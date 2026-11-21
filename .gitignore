@@ -7,3 +7,7 @@
 # derleme günlükleri
 build*.log
 build.rc
+
+# build.sh tarafindan olusturulan sembolik linkler (kaynak degil)
+/airootfs/usr/share/icons/
+/airootfs/usr/share/pixmaps/

@@ -53,8 +53,10 @@ if [[ ! -f "$BRAND_ICON" ]]; then
   echo "      Dosyayı airootfs/usr/share/horos/branding/ altına koy." >&2
   exit 1
 fi
-if ! compgen -G "$WALLPAPER_DIR/*.jpg" >/dev/null; then
-  echo "HATA: Duvar kağıdı bulunamadı: $WALLPAPER_DIR/*.jpg" >&2
+shopt -s nullglob
+wallpapers=("$WALLPAPER_DIR"/horos-wallpaper-*.jpg)
+if (( ${#wallpapers[@]} != 20 )); then
+  echo "HATA: 20 duvar kağıdı bekleniyor, ${#wallpapers[@]} bulundu: $WALLPAPER_DIR" >&2
   exit 1
 fi
 
@@ -82,7 +84,7 @@ if (( ${#isos[@]} == 0 )); then
   echo "HATA: out/ içinde ISO bulunamadı." >&2
   exit 1
 fi
-iso="$(ls -1t "${isos[@]}" | sed -n '1p')"
+iso="$(find "${isos[@]}" -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2-)"
 
 echo
 echo "Tamamlandı: $iso"

@@ -23,7 +23,8 @@ partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
 hostname_v="horos"; net_state="denetleniyor..."
 root_hash=""; username=""; user_hash=""; user_admin=1
 PW_HASH=""
-kb_ok=0; detect_done=0; limon_asked=0; DETECT_DIR=""
+kb_ok=0; detect_done=0; limon_asked=0; DETECT_DIR=""; DETECT_PID=""
+CFG=""; BRAND_META=""; BRAND_STAGE=""; BRAND_POST=""; MOUNT_DIRS=()
 # Takas varsayılan olarak açık; boyut kurulum ortamının RAM'ine göre seçilir.
 swap_on=1; swap_mib=0
 # Donanıma göre eklenen sürücü paketleri (lspci/lsusb ile algılanır).
@@ -62,7 +63,10 @@ keymap_for_country() {
 
 keymap_exists() {
   [[ -d "$KEYMAP_DIR" ]] || return 0   # doğrulanamıyorsa engelleme
-  find "$KEYMAP_DIR" -type f \( -name "$1.map" -o -name "$1.map.gz" \) 2>/dev/null | grep -q .
+  # Kullanici girdisi find deseni olarak yorumlanmasin; yalnizca bilinen karakterler.
+  [[ "$1" =~ ^[A-Za-z0-9_+.-]+$ ]] || return 1
+  find "$KEYMAP_DIR" -type f \( -name '*.map' -o -name '*.map.gz' \) -printf '%f\n' 2>/dev/null \
+    | grep -Fxq -e "$1.map" -e "$1.map.gz"
 }
 
 profile_title() {
@@ -162,11 +166,8 @@ detect_drivers() {
     pkgs+=" mesa"
     names+=" GPU"
   fi
-  # Broadcom kablosuz: extra deposundaki STA sürücüsü.
-  if grep -qiE 'network controller.*\[14e4:' <<<"$pci"; then
-    pkgs+=" broadcom-wl"
-    names+=" Broadcom-WiFi"
-  fi
+  # Broadcom kablosuz: modern yongalarda brcmfmac linux-firmware ile gelir.
+  # broadcom-wl AUR'da oldugu icin paket listesine eklenmez (pacman kurulumu dururdu).
   # Intel ses: Sound Open Firmware.
   if grep -qiE 'audio device.*\[8086:' <<<"$pci"; then
     pkgs+=" sof-firmware"
@@ -188,12 +189,44 @@ detect_drivers() {
     names+=" Bluetooth"
   fi
 
-  driver_pkgs="$(echo $pkgs)"
+  driver_pkgs="$(tr -s '[:space:]' ' ' <<<"$pkgs" | sed 's/^ //; s/ $//')"
   driver_note="${names#, }"
   [[ -z "$driver_note" ]] && driver_note="ek sürücü gerekmiyor"
 }
 
 pause() { sleep "${1:-1}"; }
+
+# HOROS_EFI yalnızca test override'ı; 0/1 dışındaki değer yok sayılır.
+is_efi() {
+  local override="${HOROS_EFI:-}"
+  [[ "$override" == "1" ]] && return 0
+  [[ "$override" == "0" ]] && return 1
+  [[ -d /sys/firmware/efi ]]
+}
+
+# Bozuk cikislarda (IPT, Ctrl-C, hata) tum gecici dosya ve mount'lar temizlenir.
+cleanup() {
+  [[ -n "$DETECT_PID" ]] && kill "$DETECT_PID" 2>/dev/null || true
+  [[ -n "$DETECT_DIR" ]] && rm -rf "$DETECT_DIR"
+  [[ -n "$CFG" ]] && rm -f "$CFG"
+  [[ -n "$BRAND_META" ]] && rm -f "$BRAND_META"
+  [[ -n "$BRAND_STAGE" ]] && rm -rf "$BRAND_STAGE"
+  [[ -n "$BRAND_POST" ]] && rm -f "$BRAND_POST"
+  local d
+  for d in "${MOUNT_DIRS[@]:-}"; do
+    [[ -n "$d" ]] || continue
+    umount -R "$d" 2>/dev/null || true
+    rmdir "$d" 2>/dev/null || true
+  done
+}
+
+forget_mount() {
+  local d keep=()
+  for d in "${MOUNT_DIRS[@]:-}"; do
+    [[ -n "$d" && "$d" != "$1" ]] && keep+=("$d")
+  done
+  MOUNT_DIRS=("${keep[@]:-}")
+}
 
 # Ağ + konum tespiti arka planda çalışır; ekran beklemeden açılır, sonuç gelince özet güncellenir.
 start_detect() {
@@ -211,6 +244,7 @@ start_detect() {
     printf 'net=%s\ntz=%s\ncountry=%s\n' "$n" "$tz" "$c" > "$DETECT_DIR/tmp" \
       && mv "$DETECT_DIR/tmp" "$DETECT_DIR/done"
   ) >/dev/null 2>&1 &
+  DETECT_PID=$!
 }
 
 # Sonuç geldiyse uygular; ekranın yenilenmesi gerekiyorsa 0 döner.
@@ -234,6 +268,7 @@ apply_detect() {
     fi
   fi
   rm -rf "$DETECT_DIR"
+  DETECT_DIR=""; DETECT_PID=""
   return 0
 }
 
@@ -322,21 +357,28 @@ set_limon() {
   echo "  4) Gemini"
   echo "  5) Hepsi"
   read -rp "Seçim [1-5]: " a || return 0
-  limon_asked=1
   case "$a" in
-    1) extras="" ;;
-    2) extras=claude ;;
-    3) extras=openai ;;
-    4) extras=gemini ;;
-    5) extras=all ;;
+    1) extras=""; limon_asked=1 ;;
+    2) extras=claude; limon_asked=1 ;;
+    3) extras=openai; limon_asked=1 ;;
+    4) extras=gemini; limon_asked=1 ;;
+    5) extras=all; limon_asked=1 ;;
     *) echo "Geçersiz seçim."; pause ;;
   esac
 }
 
 # Disk listesi: yol<TAB>bayt<TAB>model<TAB>sektör  (kurulum ortamının kendi diski hariç)
 list_disks() {
-  local src live=""
-  src="$(findmnt -rno SOURCE /run/archiso/bootmnt 2>/dev/null || true)"
+  local src live="" back=""
+  src="$(findmnt -rno SOURCE /run/archiso/bootmnt 2>/dev/null | head -n1 || true)"
+  # Loop ile bagli ISO'larda PKNAME bos olur; ISO dosyasinin oldugu diski bulana
+  # kadar loop arka planini takip et (ayni disk silinmesin).
+  while [[ "$src" == /dev/loop* ]]; do
+    back="$(losetup -nO BACK-FILE "$src" 2>/dev/null | head -n1)"
+    [[ -n "$back" ]] || break
+    src="$(findmnt -rno SOURCE -T "$back" 2>/dev/null | head -n1)"
+    [[ -n "$src" ]] || break
+  done
   if [[ -n "$src" ]]; then
     live="$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)"
     [[ -n "$live" ]] && live="/dev/$live"
@@ -420,7 +462,11 @@ PY
 }
 
 set_disk() {
-  local lines=() l i=0 pc name size model sec pm psz psz_gb plan=""
+  local lines=() l i=0 pc name size model sec pm psz psz_gb plan="" target=""
+  # Onceki secim ACPI/iptal yollariyla karismasin: durum her cacagrista sifirlanir.
+  disk=""; disk_bytes=0; disk_sec=512
+  disk_mode="full"; partial_start=0; partial_size=0
+  partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
   mapfile -t lines < <(list_disks)
   if (( ${#lines[@]} == 0 )); then
     echo; echo "Kurulabilecek disk bulunamadı."; pause 2; return 0
@@ -440,26 +486,33 @@ set_disk() {
   if (( size < 8 * 1024 * 1024 * 1024 )); then
     echo "Disk çok küçük (en az 8 GB gerekir)."; pause 2; return 0
   fi
-  disk="$name"; disk_bytes="$size"; disk_sec="$sec"
+  target="$name"
 
   echo
   echo "Bölümleme yöntemi:"
   echo "  1) Tüm diski sil ve otomatik bölümlendir (eski yöntem)"
   echo "  2) Mevcut bölümleri koru, boş alana kur (çift sistem / veri korunur)"
-  read -rp "Seçim [1-2]: " pm || pm=1
+  read -rp "Seçim [1-2]: " pm || return 0
+  if [[ "$pm" != "1" && "$pm" != "2" ]]; then
+    echo "Geçersiz seçim."; pause; return 0
+  fi
   if [[ "$pm" == "2" ]]; then
     # Kullanıcı GB girer; archinstall MiB bekler. 20 / 20G / 20GB aynı anlam.
     read -rp "Ayrılacak alan GB [100]: " psz || psz=""
+    psz="${psz//[[:space:]]/}"
     [[ -z "$psz" ]] && psz="100"
     psz_gb="${psz^^}"
     psz_gb="${psz_gb%GIB}"
     psz_gb="${psz_gb%GB}"
     psz_gb="${psz_gb%G}"
-    if [[ ! "$psz_gb" =~ ^[0-9]+$ ]] || (( 10#$psz_gb < 8 )); then
+    if [[ ! "$psz_gb" =~ ^[0-9]+$ || ${#psz_gb} -gt 6 ]] || (( 10#$psz_gb < 8 )); then
       echo "Geçersiz boyut (en az 8 GB; örn. 20, 20G veya 100GB)."; pause 2; return 0
     fi
     psz=$(( 10#$psz_gb * 1024 ))   # MiB
-    if ! plan="$(find_partial_plan "$disk" "$psz")"; then
+    if (( psz > size / 1024 / 1024 )); then
+      echo "İstenen alan disk boyutundan büyük."; pause 2; return 0
+    fi
+    if ! plan="$(find_partial_plan "$target" "$psz")"; then
       echo "${R}Yeterli boş alan bulunamadı.${N} Diski Windows'tan küçültüp boş alan oluştur."
       pause 3; return 0
     fi
@@ -477,6 +530,8 @@ set_disk() {
     partial_start=0; partial_size=0; partial_esp=""
     partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
   fi
+  # Yalnızca tum dogrulamalar gectiyse hedefi kesinlestir.
+  disk="$target"; disk_bytes="$size"; disk_sec="$sec"
 }
 
 set_network() {
@@ -497,7 +552,7 @@ set_network() {
   done
 }
 
-# Parolayı iki kez sorar; yescrypt/sha512 özetini PW_HASH'e yazar. Boş giriş = vazgeç.
+# Parolayı iki kez sorar; SHA-512 crypt ($6$) özetini PW_HASH'e yazar. Boş giriş = vazgeç.
 ask_password() { # $1: etiket
   local p1 p2
   (( kb_ok )) || set_keyboard   # yanlış düzen parolayı bozar: yazmadan önce onayla
@@ -657,8 +712,7 @@ prepare_pacman() {
 # şeması en kararlı olan yol).
 generate_config() { # $1: çıktı dosyası
   local efi=0 wifi=0
-  [[ -d /sys/firmware/efi ]] && efi=1
-  [[ -n "${HOROS_EFI:-}" ]] && efi="$HOROS_EFI"   # yalnızca test için
+  is_efi && efi=1
   compgen -G '/sys/class/net/*/wireless' >/dev/null && wifi=1
 
   H_PROFILE="$profile" H_PDIR="$PROFILE_DIR" H_EXTRAS="$extras" \
@@ -671,7 +725,7 @@ generate_config() { # $1: çıktı dosyası
   H_ESP_FS="$partial_esp_fs" \
   H_SWAP="$swap_on" H_SWAP_MIB="$swap_mib" H_DRIVERS="$driver_pkgs" \
   python3 - "$1" <<'PY'
-import glob, json, os, shlex, shutil, sys, uuid
+import glob, json, os, shlex, shutil, sys, tempfile, uuid
 
 E = os.environ
 out = sys.argv[1]
@@ -689,6 +743,8 @@ esp_dev = E.get("H_ESP_DEV", "")
 esp_start = int(E.get("H_ESP_START") or 0)
 esp_size = int(E.get("H_ESP_SIZE") or 0)
 esp_fs = E.get("H_ESP_FS") or "fat32"
+# Paylaşılan ESP'de Windows'un /EFI/BOOT fallback dosyasına dokunma.
+removable_efi = not (mode == "partial" and esp_dev)
 if esp_fs not in ("fat32", "fat16"):
     esp_fs = "fat32"
 
@@ -704,10 +760,13 @@ def read_list(p):
 # hazirlayip kurulum sonrasi hedef diske cp -a ile kopyaliyoruz. Boylece
 # archinstall'in "Executing custom command ..." logunda devasa base64 bloklari
 # akmıyor; config okunabilir kalıyor.
-STAGE = "/tmp/horos-branding"
-POST = "/tmp/horos-post-actions.sh"
-shutil.rmtree(STAGE, ignore_errors=True)
-os.makedirs(STAGE, exist_ok=True)
+# Sabit /tmp yollari symlink/clobber riski tasidigi icin rastgele olusturulur.
+# Yollar archinstall config'inin yanisindaki .branding dosyasina yazilir; bash
+# kurulumdan sonra onlari okuyup cp -a ile hedef sisteme kopyalar.
+STAGE = tempfile.mkdtemp(prefix="horos-branding.")
+post_fd, POST = tempfile.mkstemp(prefix="horos-post-actions.", suffix=".sh")
+os.close(post_fd)
+os.chmod(POST, 0o755)
 post_actions = []
 
 
@@ -718,7 +777,7 @@ def staged(dest):
 def write_cmd(src, dest, mode=None):
     p = staged(dest)
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    shutil.copyfile(src, p)
+    shutil.copy2(src, p)   # profil dosyalarindaki izinleri koru
     if mode:
         os.chmod(p, int(mode, 8))
     return ":"
@@ -734,6 +793,9 @@ def file_commands(root):
     base = os.path.join(root, "files")
     cmds = []
     for dirpath, _, names in sorted(os.walk(base)):
+        rel = os.path.relpath(dirpath, base)
+        if rel != ".":
+            os.makedirs(staged("/" + rel), exist_ok=True)   # bos dizinler de kopyalansin
         for name in sorted(names):
             src = os.path.join(dirpath, name)
             cmds.append(write_cmd(src, "/" + os.path.relpath(src, base)))
@@ -776,8 +838,10 @@ for src in sorted(glob.glob("/etc/NetworkManager/system-connections/*")):
         commands.append(write_cmd(src, "/etc/NetworkManager/system-connections/" + os.path.basename(src), "600"))
 
 if "nftables" in packages:
+    # include "/etc/nftables.d/*.nft" hedef icindeki yolu gosterir; dogrulamayi
+    # arch-chroot icinde yapmazsak live sistemin /etc'ini okur, yanlis "tamam" verir.
     add_post(
-        "nft -c -f \"$HOROS_ROOT/etc/nftables.conf\" >/dev/null 2>&1 "
+        "arch-chroot \"$HOROS_ROOT\" nft -c -f /etc/nftables.conf >/dev/null 2>&1 "
         "|| echo 'HorOS: UYARI: guvenlik duvari kurallari dogrulanamadi, /etc/nftables.conf dosyasini kontrol et'"
     )
 
@@ -813,16 +877,17 @@ if swap_on and swap_mib > 0:
 
 commands += [f"systemctl enable {s}" for s in services]
 
-# Önyükleyici: her zaman GRUB (UEFI + BIOS). archinstall'a açıkça söylenir; ayrıca aşağıdaki
-# yedek adım, archinstall önyükleyiciyi kurmadıysa veya UEFI NVRAM kaydı kalıcı değilse
-# (sanal makinelerde sık) diski yine de açılabilir yapar.
+# Önyükleyici: her zaman GRUB (UEFI + BIOS). archinstall zaten kurar; yedek adım
+# yalnızca UEFI fallback dosyası eksikse devreye girer (loader.conf kontrolü GRUB
+# kurulumunda hiçbir zaman doğru olmadığı için kaldırıldı).
 packages += ["grub"] + (["efibootmgr"] if efi else [])
 if efi:
+    efi_check = "/boot/EFI/BOOT/BOOTX64.EFI" if removable_efi else "/boot/EFI/GRUB/grubx64.efi"
+    efi_flag = " --removable" if removable_efi else ""
     commands.append(
-        "if [ ! -f /boot/loader/loader.conf ]; then "
-        "[ -f /boot/EFI/BOOT/BOOTX64.EFI ] || "
-        "grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=HorOS --removable "
-        "|| echo 'HorOS: UYARI: GRUB (UEFI) kurulamadi'; fi; true"
+        f"[ -f {efi_check} ] || "
+        "grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=HorOS"
+        + efi_flag + " || echo 'HorOS: UYARI: GRUB (UEFI) kurulamadi'; true"
     )
 else:
     commands.append(
@@ -920,7 +985,7 @@ if os.path.isfile(icon_src):
                    "[Desktop Entry]\nType=Directory\nName=HorOS project\nIcon=horos\n"),
         write_text("/etc/xdg/menus/applications-merged/horos.menu", menu_xml),
     ]) + " || true")
-    add_post("gtk-update-icon-cache -f -t \"$HOROS_ROOT/usr/share/icons/hicolor\" >/dev/null 2>&1 || true")
+    add_post("arch-chroot \"$HOROS_ROOT\" gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true")
 # /usr/share/backgrounds/horos icindeki tum gorselleri once hedef sisteme kopyalar,
 # sonra GNOME ve KDE'nin "Arka plan" secenek listelerine kaydeder. Kanonik dosyalar
 # olmadan XML'deki yollar bos onizlemeye yol acardi.
@@ -1020,7 +1085,7 @@ if os.path.isfile(wall_src):
     # Schema dosyasi staging uzerinden kurulumdan sonra kopyalanir; derlemeyi
     # post-actions icinde yapmak zorundayiz (eski chroot komutu dosya henuz
     # yokken calisir, eksik gschemas.compiled uretirdi).
-    add_post("glib-compile-schemas \"$HOROS_ROOT/usr/share/glib-2.0/schemas\" >/dev/null 2>&1 || true")
+    add_post("arch-chroot \"$HOROS_ROOT\" glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true")
     # KDE Plasma: yeni kullanıcıların masaüstü profiline HorOS duvar kağıdını yaz.
     # immutability=1 masaustu kilitler; kullanici duvar kagidi/panel degisikligi
     # yapamaz. 0 = kullanici degistirebilir (varsayilan HorOS duvar kagidi yine gelir).
@@ -1120,7 +1185,7 @@ commands = [c for c in commands if c.strip() != ":"]
 config = {
     # Eski şema ("bootloader") ve yeni şema ("bootloader_config"): archinstall bilmediğini yok sayar.
     "bootloader": "Grub",
-    "bootloader_config": {"bootloader": "Grub", "uki": False, "removable": True},
+    "bootloader_config": {"bootloader": "Grub", "uki": False, "removable": removable_efi},
     "hostname": E["H_HOST"],
     "packages": list(dict.fromkeys(packages)),
     "custom_commands": commands,
@@ -1135,6 +1200,15 @@ fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
+# Cift sistemde dogru koku ayirt etmek icin hedef sistemde bir isaret birakiriz.
+# apply_branding ve verify_boot yalnizca bu dosyayi tasiyan bolumu kullanir.
+write_text("/etc/horos-install-target", disk_dev + "\n")
+
+# Rastgele staging yollari bash'a config'in yanisindaki kucuk meta dosyasiyla aktarilir.
+fd = os.open(out + ".branding", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump({"staging": STAGE, "post": POST}, f)
+
 # Dosya kopyalandiktan sonra chroot icinde calistirilacak kucuk islemler.
 with open(POST, "w", encoding="utf-8") as f:
     f.write("#!/bin/bash\nset -u\n" + "\n".join(post_actions) + "\n")
@@ -1146,10 +1220,10 @@ PY
 # sistemde hazirladik; kurulum bitince kok bolumu yazilabilir baglayip cp -a ile
 # hedef sisteme kopyalariz. Boylece kurulum logunda base64 yigitlari akmz.
 apply_branding() {
-  local staging="/tmp/horos-branding" post="/tmp/horos-post-actions.sh"
-  local m p root="" rc=0 attempt
+  local staging="${BRAND_STAGE:-}" post="${BRAND_POST:-}"
+  local m p root="" rc=0 attempt ids=""
   local parts=()
-  [[ -d "$staging" ]] || { rm -f "$post"; return 0; }
+  [[ -n "$staging" && -d "$staging" ]] || { rm -f "$post"; return 0; }
 
   echo
   echo "HorOS marka dosyalari yerlestiriliyor..."
@@ -1159,16 +1233,23 @@ apply_branding() {
 
   mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
   m="$(mktemp -d /tmp/horos-brand.XXXXXX)"
+  MOUNT_DIRS+=("$m")
   for p in "${parts[@]}"; do
     mount -o ro "$p" "$m" 2>/dev/null || continue
-    if [[ -f "$m/etc/fstab" && -d "$m/usr" ]]; then root="$p"; fi
+    # Cift sistemde baska Linux kurulu olabilir; yalnizca kendi isaretimizi tasiyan
+    # bolum hedefimizdir (ilk eslesme degil, kesin eslesme).
+    if [[ -f "$m/etc/fstab" && -d "$m/usr" && -f "$m/etc/horos-install-target" ]]; then
+      root="$p"
+    fi
     umount "$m" 2>/dev/null || true
     [[ -n "$root" ]] && break
   done
   if [[ -z "$root" ]]; then
     echo "${R}UYARI:${N} kok bolum bulunamadi, marka dosyalari kopyalanamadi."
     rmdir "$m" 2>/dev/null || true
+    forget_mount "$m"
     rm -rf "$staging" "$post"
+    BRAND_STAGE=""; BRAND_POST=""
     return 1
   fi
 
@@ -1180,7 +1261,9 @@ apply_branding() {
   if (( rc != 0 )); then
     echo "${R}UYARI:${N} kok bolum ($root) yazilabilir baglanamadi."
     rmdir "$m" 2>/dev/null || true
+    forget_mount "$m"
     rm -rf "$staging" "$post"
+    BRAND_STAGE=""; BRAND_POST=""
     return 1
   fi
 
@@ -1209,7 +1292,9 @@ apply_branding() {
   fi
   umount "$m" 2>/dev/null || rc=1
   rmdir "$m" 2>/dev/null || true
+  forget_mount "$m"
   rm -rf "$staging" "$post"
+  BRAND_STAGE=""; BRAND_POST=""
   (( rc == 0 )) && echo "${G}Marka dosyalari kuruldu.${N}"
   return "$rc"
 }
@@ -1217,7 +1302,7 @@ apply_branding() {
 # Kurulum bitince diski salt-okunur bağlayıp çekirdek, initramfs ve önyükleyici dosyalarını arar.
 verify_boot() {
   local m mount_err rc attempt efi=0 parts=() boot root problems=()
-  [[ -d /sys/firmware/efi ]] && efi=1
+  is_efi && efi=1
 
   # archinstall'in chroot'unda açılan swapfile live ortamda hâlâ aktif kalabilir.
   # Bu, /mnt'in tamamen kapanmasını ve kökün başka yere ro mount edilmesini engeller.
@@ -1230,6 +1315,7 @@ verify_boot() {
     echo "${R}UYARI:${N} $disk üzerinde beklenen bölümler bulunamadı."; return 1
   fi
   m="$(mktemp -d /tmp/horos-verify.XXXXXX)"
+  MOUNT_DIRS+=("$m")
   mount_err="$(mktemp /tmp/horos-verify-mount.XXXXXX)"
 
   if [[ "$disk_mode" == "partial" ]]; then
@@ -1239,15 +1325,25 @@ verify_boot() {
       mount -o ro "$p" "$m" 2>/dev/null || continue
       if [[ -d "$m/EFI" || -f "$m/grub/grub.cfg" ]]; then candidate="$p"; fi
       umount "$m" 2>/dev/null || true
+      [[ -n "$candidate" ]] && break
     done
     boot="$candidate"
     root=""
     for p in "${parts[@]}"; do
       mount -o ro "$p" "$m" 2>/dev/null || continue
-      if [[ -f "$m/etc/fstab" && -d "$m/usr" ]]; then root="$p"; fi
+      # marka dosyalarini kopyaladigimiz kok bolum; baska Linux'a ait olabilir.
+      if [[ -f "$m/etc/fstab" && -d "$m/usr" && -f "$m/etc/horos-install-target" ]]; then
+        root="$p"
+      fi
       umount "$m" 2>/dev/null || true
+      [[ -n "$root" ]] && break
     done
-    [[ -z "$root" ]] && root="${parts[-1]}"
+    if [[ -z "$root" ]]; then
+      echo "${R}UYARI:${N} HorOS kok bolumu bulunamadi; önyükleme doğrulanamadi."
+      rm -f "$mount_err"; rmdir "$m" 2>/dev/null || true
+      forget_mount "$m"
+      return 1
+    fi
     [[ -z "$boot" ]] && boot="$root"
   else
     # Tam disk modunda ilk bölüm /boot, son bölüm kök.
@@ -1265,13 +1361,14 @@ verify_boot() {
   if (( rc != 0 )); then
     echo "${R}UYARI:${N} kök bölüm ($root) bağlanamadı: $(tr '\n' ' ' < "$mount_err")"
     rm -f "$mount_err"; rmdir "$m" 2>/dev/null || true
+    forget_mount "$m"
     return 1
   fi
 
-  mkdir -p "$m/boot"
+  [[ -d "$m/boot" ]] || mkdir -p "$m/boot" 2>/dev/null || problems+=("boot dizini oluşturulamadı")
   mount -o ro "$boot" "$m/boot" 2>/dev/null || problems+=("boot bölümü ($boot) bağlanamadı")
-  [[ -s "$m/boot/vmlinuz-linux" ]]        || problems+=("çekirdek yok (/boot/vmlinuz-linux)")
-  [[ -s "$m/boot/initramfs-linux.img" ]]  || problems+=("initramfs yok (/boot/initramfs-linux.img)")
+  compgen -G "$m/boot/vmlinuz-*" >/dev/null || problems+=("çekirdek yok (/boot/vmlinuz-*)")
+  compgen -G "$m/boot/initramfs-*.img" >/dev/null || problems+=("initramfs yok (/boot/initramfs-*.img)")
   [[ -f "$m/boot/grub/grub.cfg" || -f "$m/boot/loader/loader.conf" ]] \
     || problems+=("önyükleyici yapılandırması yok (grub.cfg)")
   if (( efi )); then
@@ -1284,6 +1381,7 @@ verify_boot() {
   swapoff -a 2>/dev/null || true
   rm -f "$mount_err"
   rmdir "$m" 2>/dev/null || true
+  forget_mount "$m"
 
   if (( ${#problems[@]} > 0 )); then
     echo "${R}Önyükleme doğrulaması başarısız:${N}"
@@ -1297,6 +1395,9 @@ verify_boot() {
 
 begin_install() {
   local missing=()
+  # Algılama kullanıcı yazarken bitmiş olabilir; hemen uygulanmadan kuruluma
+  # geçilmesin (eski davranışta yeni saat dilimi/klavye kayboluyordu).
+  apply_detect || true
   [[ -z "$disk" ]] && missing+=("Kurulum hedefi")
   admin_ok || missing+=("Yönetici hesap (kullanıcı oluştur veya root parolası belirle)")
   if [[ -z "$DRYRUN" ]]; then
@@ -1325,7 +1426,7 @@ begin_install() {
   fi
   echo "  Takas       : $(swap_label)"
   echo "  Sürücüler   : $driver_note"
-  echo "  Önyükleme   : $([[ -d /sys/firmware/efi ]] && echo UEFI || echo BIOS)"
+  echo "  Önyükleme   : $(is_efi && echo UEFI || echo BIOS)"
   echo "  Makine adı  : $hostname_v   Saat dilimi: $timezone   Klavye: $kb   Dil: en_US.UTF-8"
   echo "  Kullanıcı   : ${username:-yok}$( ((user_admin)) && [[ -n "$username" ]] && echo ' (sudo)')   Root: $([[ -n "$root_hash" ]] && echo parolalı || echo kilitli)"
   echo "  limon       : $(limon_label)"
@@ -1336,35 +1437,51 @@ begin_install() {
     echo "Vazgeçildi."; pause; return 99
   fi
 
-  local cfg
+  local cfg paths
   cfg="$(mktemp --suffix=.json /tmp/horos-archinstall.XXXXXX)"
+  CFG="$cfg"; BRAND_META="$cfg.branding"; BRAND_STAGE=""; BRAND_POST=""
   if ! generate_config "$cfg"; then
     echo "HATA: yapılandırma üretilemedi." >&2
-    rm -f "$cfg"; return 1
+    rm -f "$cfg" "$BRAND_META"; CFG=""; BRAND_META=""
+    return 1
+  fi
+  # Python rastgele staging yollari uretir; onlari config'in yanisindaki
+  # kucuk meta dosyasindan oku (archinstall bilinmeyen config anahtarini reddedebilir).
+  if [[ -f "$BRAND_META" ]]; then
+    paths="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["staging"],d["post"])' "$BRAND_META" 2>/dev/null)" || paths=""
+    [[ -n "$paths" ]] && read -r BRAND_STAGE BRAND_POST <<<"$paths"
   fi
 
   if [[ -n "$DRYRUN" ]]; then
     echo "DRYRUN: yapılandırma yazıldı, kurulum yapılmadı: $cfg"
+    rm -f "$BRAND_META"
+    CFG=""; BRAND_META=""
     return 0
   fi
 
   echo
-  prepare_pacman || { rm -f "$cfg"; return 1; }
+  prepare_pacman || {
+    rm -f "$cfg" "$BRAND_META"; CFG=""; BRAND_META=""
+    rm -rf "$BRAND_STAGE"; rm -f "$BRAND_POST"
+    BRAND_STAGE=""; BRAND_POST=""
+    return 1
+  }
   umount -R /mnt 2>/dev/null || true
   swapoff -a 2>/dev/null || true
 
   echo
   echo "Kurulum başlıyor..."
-  local rc=0
+  local rc=0 brand_rc=0 boot_rc=0
   archinstall --config "$cfg" --silent || rc=$?
-  rm -f "$cfg"
+  rm -f "$cfg" "$BRAND_META"; CFG=""; BRAND_META=""
   if (( rc == 0 )); then
-    apply_branding || rc=4
-  fi
-  if (( rc == 0 )); then
+    apply_branding || brand_rc=$?
     echo
-    verify_boot || rc=3
+    verify_boot || boot_rc=$?
   fi
+  # Marka hatası önyükleme doğrulamasını gizlemesin; önyükleme öncelikli.
+  (( boot_rc )) && return 3
+  (( brand_rc )) && return 4
   return "$rc"
 }
 
@@ -1384,7 +1501,7 @@ main() {
   fi
 
   # Ekran hemen açılır: ağ/konum tespiti arka planda, klavye parola yazılmadan önce onaylanır.
-  trap '[[ -n "$DETECT_DIR" ]] && rm -rf "$DETECT_DIR"' EXIT
+  trap cleanup EXIT
   kb=us
   swap_mib="$(swap_size_for_ram)"
   detect_drivers
@@ -1392,7 +1509,7 @@ main() {
 
   local c rc st buf="" redraw=1 targs
   while true; do
-    if (( redraw )); then show_hub; printf 'Seçim: '; buf=""; fi
+    if (( redraw )); then show_hub; printf 'Seçim: %s' "$buf"; fi
     redraw=1
     targs=(); (( detect_done )) || targs=(-t 1)
     read -r "${targs[@]}" c; st=$?
