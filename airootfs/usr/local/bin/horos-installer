@@ -1190,8 +1190,16 @@ apply_branding() {
   # kullanici yazamazsa reboot'ta varsayilana doner; ev dizinini burada, dis
   # chroot'a gerek kalmadan ve sonucunu kontrol ederek duzeltiyoruz.
   if [[ -n "${username:-}" && -d "$m/home/$username" ]]; then
-    if ! chown -R "$username:$username" "$m/home/$username" 2>/dev/null; then
-      echo "${R}UYARI:${N} $username ev dizininin sahipligi duzeltilemedi; masaustu ayarlari kaybolabilir."
+    # Live ISO /etc/passwd'inde hedef kullanici yok; "chown nar:nar" invalid user
+    # olur. Hedefin passwd dosyasindan sayisal UID/GID alip onu kullaniyoruz.
+    ids="$(awk -F: -v u="$username" '$1==u {print $3 ":" $4; exit}' "$m/etc/passwd" 2>/dev/null)"
+    if [[ -n "$ids" ]]; then
+      if ! chown -R "$ids" "$m/home/$username" 2>/dev/null; then
+        echo "${R}UYARI:${N} $username ev dizininin sahipligi duzeltilemedi; masaustu ayarlari kaybolabilir."
+        rc=1
+      fi
+    else
+      echo "${R}UYARI:${N} $username hedef passwd'de bulunamadi; ev dizini sahipligi duzeltilemedi."
       rc=1
     fi
   fi
