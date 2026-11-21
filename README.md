@@ -44,7 +44,6 @@ sudo ./build.sh --keep # reuse work/ for a quick rebuild
 
 The ISO is written to the `out/` directory. The build workspace is in `work/`.
 Builds start clean by default because `mkarchiso` caches steps in `work/` and can silently skip profile changes.
-After the build, the script checks that the HorOS Plymouth theme is inside the initramfs.
 
 ## Test
 

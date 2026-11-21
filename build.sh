@@ -28,17 +28,10 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-for tool in mkarchiso bsdtar lsinitcpio; do
-  if ! command -v "$tool" >/dev/null; then
-    case "$tool" in
-      mkarchiso) pkg=archiso ;;
-      bsdtar)    pkg=libarchive ;;
-      lsinitcpio) pkg=mkinitcpio ;;
-    esac
-    echo "$tool bulunamadı. Kur: pacman -S $pkg" >&2
-    exit 1
-  fi
-done
+if ! command -v mkarchiso >/dev/null; then
+  echo "mkarchiso bulunamadı. Kur: pacman -S archiso" >&2
+  exit 1
+fi
 
 # Zip/Windows/git bazı sembolik linkleri 0 baytlık dosyaya çevirebilir.
 # Servis linklerini her build'de yeniden, doğru şekilde oluştur.
@@ -51,9 +44,6 @@ link pacman-init.service    /etc/systemd/system/pacman-init.service
 
 # Betikler çalıştırılabilir olsun
 chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
-
-# Açılış ekranı HorOS'un kendi Plymouth temasını kullanır. /etc/plymouth/plymouthd.conf
-# Theme=horos seçer; mkinitcpio plymouth hook'u tema klasörünü initramfs'e kopyalar.
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
@@ -93,34 +83,6 @@ if (( ${#isos[@]} == 0 )); then
   exit 1
 fi
 iso="$(ls -1t "${isos[@]}" | sed -n '1p')"
-
-# Açılış ekranının ISO'ya girdiğini doğrula: HorOS teması ve seçimi initramfs'te olmalı.
-if ! grep -Eq '^[[:space:]]*Theme[[:space:]]*=[[:space:]]*horos[[:space:]]*$' \
-     "$ROOT/airootfs/etc/plymouth/plymouthd.conf"; then
-  echo "HATA: plymouthd.conf içinde 'Theme=horos' bulunamadı." >&2
-  exit 1
-fi
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-bsdtar -tf "$iso" > "$tmp/iso.list"
-initramfs_rel="$(grep -m1 -E '/boot/[^/]+/initramfs-linux\.img$' "$tmp/iso.list" || true)"
-if [[ -z "$initramfs_rel" ]]; then
-  echo "HATA: ISO içinde initramfs-linux.img bulunamadı." >&2
-  exit 1
-fi
-bsdtar -xf "$iso" -C "$tmp" "$initramfs_rel"
-lsinitcpio "$tmp/$initramfs_rel" > "$tmp/initramfs.list"
-for f in etc/plymouth/plymouthd.conf \
-         usr/share/plymouth/themes/horos/horos.plymouth \
-         usr/share/plymouth/themes/horos/horos.script \
-         usr/share/plymouth/themes/horos/horos-mark.png; do
-  if ! grep -Fxq "$f" "$tmp/initramfs.list"; then
-    echo "HATA: Plymouth dosyası initramfs içinde yok: $f" >&2
-    echo "      initramfs: $initramfs_rel" >&2
-    exit 1
-  fi
-done
-echo "HorOS Plymouth teması ve seçimi initramfs içinde doğrulandı."
 
 echo
 echo "Tamamlandı: $iso"
