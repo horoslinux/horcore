@@ -82,7 +82,11 @@ done
 # Açılış teması (plymouth hook'u initramfs'e kopyalar).
 PLYMOUTH_CONF="$ROOT/airootfs/etc/plymouth/plymouthd.conf"
 PLYMOUTH_THEME="$ROOT/airootfs/usr/share/plymouth/themes/horos"
-if [[ ! -f "$PLYMOUTH_CONF" || ! -f "$PLYMOUTH_THEME/horos.plymouth" || ! -f "$PLYMOUTH_THEME/watermark.png" ]]; then
+# two-step eklentisi lock.png olmadan temayı yükleyemez ve text fallback'e
+# ("...") düşer. box.png opsiyoneldir ama şifre girişi için tema ile gelir.
+if [[ ! -f "$PLYMOUTH_CONF" || ! -f "$PLYMOUTH_THEME/horos.plymouth" \
+   || ! -f "$PLYMOUTH_THEME/watermark.png" || ! -f "$PLYMOUTH_THEME/lock.png" \
+   || ! -f "$PLYMOUTH_THEME/box.png" ]]; then
   echo "HATA: Plymouth yapılandırması veya tema dosyaları eksik." >&2
   exit 1
 fi
@@ -117,6 +121,25 @@ if (( ${#isos[@]} == 0 )); then
   exit 1
 fi
 iso="$(find "${isos[@]}" -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2-)"
+
+# Tema dosyaları initramfs'e girmezse canlı ISO text fallback'e düşer.
+initramfs="$(find "$ROOT/work" -name initramfs-linux.img -print -quit 2>/dev/null || true)"
+if [[ -n "$initramfs" ]] && command -v lsinitcpio >/dev/null; then
+  initramfs_files="$(lsinitcpio "$initramfs")"
+  for required in \
+    'etc/plymouth/plymouthd.conf' \
+    'usr/lib/plymouth/two-step.so' \
+    'usr/share/plymouth/themes/horos/horos.plymouth' \
+    'usr/share/plymouth/themes/horos/watermark.png' \
+    'usr/share/plymouth/themes/horos/lock.png' \
+    'usr/share/plymouth/themes/horos/throbber-0001.png' \
+    'usr/share/plymouth/themes/horos/throbber-0036.png'; do
+    if ! grep -qF "$required" <<<"$initramfs_files"; then
+      echo "HATA: Plymouth dosyası initramfs'te yok: $required" >&2
+      exit 1
+    fi
+  done
+fi
 
 echo
 echo "Tamamlandı: $iso"

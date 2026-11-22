@@ -33,6 +33,7 @@ MessageBelowAnimation=true
 DialogClearsFirmwareBackground=true
 
 [boot-up]
+UseAnimation=true
 UseEndAnimation=false
 UseFirmwareBackground=false
 

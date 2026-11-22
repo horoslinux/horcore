@@ -47,7 +47,7 @@ sudo ./build.sh --keep # reuse work/ for a quick rebuild
 
 The ISO is written to the `out/` directory. The build workspace is in `work/`.
 Builds start clean by default because `mkarchiso` caches steps in `work/` and can silently skip profile changes.
-Boot uses the bundled HorOS Plymouth theme with `quiet splash`; systemd status messages are hidden (`Esc` shows details).
+Boot uses the bundled HorOS Plymouth theme with `quiet splash`; systemd status messages are hidden (`Esc` shows details). The initial ramdisk includes `bochs`, `vmwgfx` and `vboxvideo` so the theme renders under QEMU, VMware and VirtualBox; the build verifies the theme assets inside `initramfs-linux.img`.
 
 ## Test
 
