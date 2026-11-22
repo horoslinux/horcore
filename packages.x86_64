@@ -12,6 +12,8 @@ mkinitcpio-nfs-utils
 nbd
 
 # Boot (BIOS + UEFI)
+# plymouth: HorOS açılış teması (initramfs içinde)
+plymouth
 # edk2-shell: UEFI shell; mkarchiso otomatik olarak ISO'ya ekler
 syslinux
 edk2-shell
@@ -44,6 +46,10 @@ man-pages
 bash-completion
 curl
 wget
+# openssl: parola hash'leme (openssl passwd -6)
+openssl
+# whiptail: TUI kurulum sihirbazı (Arch paket adı libnewt)
+libnewt
 
 # Installer (archinstall) and disk tools
 arch-install-scripts

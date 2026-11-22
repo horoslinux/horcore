@@ -1,2 +1,0 @@
-# HorOS server: SSH portu açık
-add element inet horos tcp_in { 22 }

@@ -42,8 +42,21 @@ link NetworkManager.service /usr/lib/systemd/system/NetworkManager.service
 link reflector.service      /usr/lib/systemd/system/reflector.service
 link pacman-init.service    /etc/systemd/system/pacman-init.service
 
-# Betikler çalıştırılabilir olsun
-chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
+# Kurulum arayüzü dosyaları (getty drop-in'i bunları doğrudan çalıştırır).
+BIN_DIR="$ROOT/airootfs/usr/local/bin"
+for script in horos horos-installer-tui horos-installer-core horos-tui-theme; do
+  if [[ ! -f "$BIN_DIR/$script" ]]; then
+    echo "HATA: Eksik kurulum betiği: $BIN_DIR/$script" >&2
+    exit 1
+  fi
+done
+chmod +x "$BIN_DIR/horos" "$BIN_DIR/horos-installer-tui"
+
+# BIOS menü arka planı (syslinux/archiso_head.cfg).
+if [[ ! -f "$ROOT/syslinux/splash.png" ]]; then
+  echo "HATA: Eksik BIOS menü arka planı: $ROOT/syslinux/splash.png" >&2
+  exit 1
+fi
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
@@ -55,8 +68,27 @@ if [[ ! -f "$BRAND_ICON" ]]; then
 fi
 shopt -s nullglob
 wallpapers=("$WALLPAPER_DIR"/horos-wallpaper-*.jpg)
-if (( ${#wallpapers[@]} != 20 )); then
-  echo "HATA: 20 duvar kağıdı bekleniyor, ${#wallpapers[@]} bulundu: $WALLPAPER_DIR" >&2
+if (( ${#wallpapers[@]} == 0 )); then
+  echo "HATA: Duvar kağıdı bulunamadı: $WALLPAPER_DIR" >&2
+  exit 1
+fi
+for wallpaper in "${wallpapers[@]}"; do
+  if [[ ! -s "$wallpaper" ]]; then
+    echo "HATA: Boş duvar kağıdı: $wallpaper" >&2
+    exit 1
+  fi
+done
+
+# Açılış teması (plymouth hook'u initramfs'e kopyalar).
+PLYMOUTH_CONF="$ROOT/airootfs/etc/plymouth/plymouthd.conf"
+PLYMOUTH_THEME="$ROOT/airootfs/usr/share/plymouth/themes/horos"
+if [[ ! -f "$PLYMOUTH_CONF" || ! -f "$PLYMOUTH_THEME/horos.plymouth" || ! -f "$PLYMOUTH_THEME/watermark.png" ]]; then
+  echo "HATA: Plymouth yapılandırması veya tema dosyaları eksik." >&2
+  exit 1
+fi
+throbbers=("$PLYMOUTH_THEME"/throbber-*.png)
+if (( ${#throbbers[@]} != 36 )); then
+  echo "HATA: 36 spinner karesi bekleniyor, ${#throbbers[@]} bulundu: $PLYMOUTH_THEME" >&2
   exit 1
 fi
 

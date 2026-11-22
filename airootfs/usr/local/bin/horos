@@ -1,26 +1,59 @@
 #!/usr/bin/env bash
 # HorOS Linux — tty1'de systemd tarafından başlatılır (getty@tty1 drop-in'i).
-# Ağ bekleme, banner vb. yok: installer hemen açılır; ağ ve konum arka planda denetlenir.
+# Kurulum arayüzü whiptail TUI'dir; eski CLI özet menüsü kullanılmaz.
 # Not: bilinçli olarak "set -e" yok; bir adım hata verirse kurulum ekranı kapanmasın.
 set -uo pipefail
 
-printf '\e[?25h'   # vt.global_cursor_default=0 ile gizlenen imleci geri aç
+printf '\e[?25h'   # imleci görünür yap
+
+INSTALLER="/usr/local/bin/horos-installer-tui"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+THEME_LIB="${HOROS_THEME_LIB:-$SCRIPT_DIR/horos-tui-theme}"
+if [[ -r "$THEME_LIB" ]]; then
+  # shellcheck source=horos-tui-theme
+  source "$THEME_LIB"
+else
+  horos_theme() { :; }
+fi
+horos_theme
+
+result_menu() { # $1 mesaj; whiptail yoksa/iptal edilirse 1 döner
+  local msg="$1" a
+  command -v whiptail >/dev/null 2>&1 || return 1
+  a="$(whiptail --title "HorOS Kurulumu" --menu "$msg" 17 72 5 \
+    "r" "Yeniden başlat" \
+    "t" "Tekrar dene" \
+    "n" "Ağ ayarlarını aç (nmtui)" \
+    "k" "Kapat" \
+    "s" "Kabuk" 3>&1 1>&2 2>&3)" || return 1
+  a="${a#\"}"; a="${a%\"}"
+  [[ -n "$a" ]] || return 1
+  printf '%s' "$a"
+}
 
 while true; do
-  /usr/local/bin/horos-installer
+  "$INSTALLER"
   rc=$?
 
   # Bitti / iptal / hata: kısa sonuç menüsü
-  echo
   if (( rc == 0 )); then
-    echo "Kurulum tamamlandı. USB/ISO'yu çıkarıp yeniden başlat."
+    msg="Kurulum tamamlandı.\nUSB/ISO'yu çıkarıp yeniden başlatabilirsin."
   elif (( rc == 130 )); then
-    echo "Kurulum iptal edildi."
+    msg="Kurulum iptal edildi."
+  elif (( rc == 99 )); then
+    msg="Kurulum için bazı bilgiler eksik.\nAğ, hedef disk ve yönetici hesabını denetleyip tekrar dene."
   else
-    echo "Kurulum tamamlanmadı (kod: $rc)."
+    msg="Kurulum tamamlanmadı (kod: $rc)."
   fi
-  echo "  [Enter] Yeniden başlat   [t] Tekrar dene   [n] Ağ   [k] Kapat   [s] Kabuk"
-  read -rp "> " a || { sleep 1; continue; }
+
+  if ! a="$(result_menu "$msg")"; then
+    echo
+    echo -e "$msg"
+    echo "  [Enter] Yeniden başlat   [t] Tekrar dene   [n] Ağ   [k] Kapat   [s] Kabuk"
+    read -rp "> " a || { sleep 1; continue; }
+  fi
+
   case "${a,,}" in
     ""|r) systemctl reboot ;;
     t)    continue ;;

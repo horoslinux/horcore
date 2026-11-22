@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+# HorOS Linux — whiptail tabanlı kurulum sihirbazı.
+# Arka uç (archinstall config, marka dosyaları, önyükleme doğrulaması)
+# horos-installer-core içinde; bu dosya yalnızca akışı ve ekranları sağlar.
+set -uo pipefail
+export LC_ALL=C.UTF-8
+
+TITLE="HorOS Kurulumu"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND="${HOROS_INSTALLER_BACKEND:-$SCRIPT_DIR/horos-installer-core}"
+DRYRUN="${HOROS_DRYRUN:-}"
+
+THEME_LIB="${HOROS_THEME_LIB:-$SCRIPT_DIR/horos-tui-theme}"
+if [[ -r "$THEME_LIB" ]]; then
+  # shellcheck source=horos-tui-theme
+  source "$THEME_LIB"
+else
+  horos_theme() { :; }
+fi
+horos_theme
+
+# Arka uç saf kütüphanedir; tüm yardımcılar ve durum değişkenleri bu kabuğa yüklenir.
+# whiptail yalnızca çalışma zamanında gerekir; arka uç her durumda yüklenmelidir.
+[[ -r "$BACKEND" ]] || { echo "$BACKEND bulunamadı." >&2; exit 1; }
+# shellcheck source=horos-installer-core
+source "$BACKEND"
+
+# ------------------------------------------------------------------ TUI yardımcıları
+check_ui() {
+  command -v whiptail >/dev/null 2>&1 || {
+    echo "whiptail bulunamadı. ISO'ya 'libnewt' paketini ekle." >&2
+    exit 1
+  }
+}
+
+abort() { echo "Kurulum iptal edildi." >&2; exit 130; }
+
+info() { # $1 mesaj, $2 yükseklik, $3 genişlik
+  whiptail --title "$TITLE" --msgbox "$1" "${2:-10}" "${3:-70}"
+}
+
+confirm() { # $1 mesaj, $2 yükseklik, $3 genişlik
+  whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-70}" --defaultno
+}
+
+pick() { # whiptail çıktısını stdout'a verir; iptal/ESC -> 1
+  local out
+  out="$(whiptail --title "$TITLE" "$@" 3>&1 1>&2 2>&3)" || return 1
+  out="${out#\"}"; out="${out%\"}"
+  printf '%s' "$out"
+}
+
+# ------------------------------------------------------------------ 1) Ağ
+set_hostname_tui() {
+  local h
+  while true; do
+    h="$(pick --inputbox "Makine adı (küçük harf, rakam ve '-'):" 10 60 "$hostname_v")" || return 0
+    if [[ "$h" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+      hostname_v="$h"
+      return 0
+    fi
+    info "Geçersiz ad. Örnek: horos-pc"
+  done
+}
+
+step_network() {
+  local choice msg
+  while true; do
+    if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
+    msg="Kurulum için internet bağlantısı gerekir.\n\nAğ durumu : $net_state\nMakine adı: $hostname_v\n\nBağlantı yoksa önce nmtui ile Wi-Fi/Ethernet ayarını yap."
+    choice="$(pick --menu "$msg" 18 72 4 \
+      "1" "Ağ durumunu yeniden denetle" \
+      "2" "Ağı yapılandır (nmtui)" \
+      "3" "Makine adını ayarla ($hostname_v)" \
+      "4" "Devam et")" || abort
+    case "$choice" in
+      1) continue ;;
+      2) nmtui || true; continue ;;
+      3) set_hostname_tui ;;
+      4) return 0 ;;
+      *) abort ;;
+    esac
+  done
+}
+
+# ------------------------------------------------------------------ 2) IP'den bölge/dil
+detect_locale_from_ip() {
+  local tz="" c="" kb2="" l2=""
+  if have_net; then
+    tz="$(ip_lookup timezone || true)"
+    c="$(ip_lookup country || true)"
+  fi
+  if [[ -n "$tz" && -f "/usr/share/zoneinfo/$tz" ]]; then
+    timezone="$tz"; tz_src="IP'den tespit edildi"
+  fi
+  if [[ "$c" =~ ^[A-Z]{2}$ ]]; then
+    country="$c"
+    kb2="$(keymap_for_country "$c")"
+    if keymap_exists "$kb2"; then kb="$kb2"; fi
+    l2="$(locale_for_country "$c")"
+    locale_exists "$l2" && lang="$l2"
+    lang_src="IP'den tespit edildi ($c)"
+  fi
+  if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
+}
+
+tui_keyboard() {
+  local k
+  while true; do
+    k="$(pick --inputbox "Klavye düzeni (örn: us, trq, trf, uk, de-latin1):" 10 66 "$kb")" || return 0
+    if keymap_exists "$k"; then
+      kb="$k"; kb_ok=1
+      loadkeys "$kb" 2>/dev/null || true
+      return 0
+    fi
+    info "'$k' bulunamadı. Tüm düzenler için: localectl list-keymaps"
+  done
+}
+
+tui_timezone() {
+  local z matches
+  while true; do
+    z="$(pick --inputbox "Saat dilimi (örn: Europe/Istanbul, UTC; arama: ist):" 10 70 "$timezone")" || return 0
+    if [[ "$z" =~ ^[A-Za-z0-9_+/-]+$ && -f "/usr/share/zoneinfo/$z" ]]; then
+      timezone="$z"; tz_src="elle seçildi"
+      return 0
+    fi
+    matches="$(timedatectl list-timezones 2>/dev/null | grep -i -- "${z//[^A-Za-z0-9_+\/-]/}" | head -n 8 | tr '\n' ' ')"
+    info "Bulunamadı. Eşleşenler:\n${matches:-yok}\n\nÖrnek: Europe/Istanbul"
+  done
+}
+
+tui_language() {
+  local l
+  while true; do
+    l="$(pick --inputbox "Sistem dili (örn: tr_TR, en_US, de_DE):" 10 66 "$lang")" || return 0
+    if locale_exists "$l"; then
+      lang="$l"; lang_src="elle seçildi"
+      return 0
+    fi
+    info "Bu locale /etc/locale.gen içinde yok.\nÖrnek: tr_TR, en_US, de_DE, fr_FR"
+  done
+}
+
+step_locale() {
+  local choice msg
+  detect_locale_from_ip
+  while true; do
+    msg="IP adresinden tespit edilen ayarlar:\n\nKlavye düzeni : $kb\nSaat dilimi   : $timezone\nDil           : $lang\n\nKaynak: ${country:-bilinmiyor} · $lang_src"
+    choice="$(pick --menu "$msg" 17 72 5 \
+      "1" "Klavye düzenini değiştir ($kb)" \
+      "2" "Saat dilimini değiştir ($timezone)" \
+      "3" "Dili değiştir ($lang)" \
+      "4" "IP tespitini yeniden çalıştır" \
+      "5" "Onayla ve devam et")" || abort
+    case "$choice" in
+      1) tui_keyboard ;;
+      2) tui_timezone ;;
+      3) tui_language ;;
+      4) detect_locale_from_ip ;;
+      5) kb_ok=1; loadkeys "$kb" 2>/dev/null || true; return 0 ;;
+      *) abort ;;
+    esac
+  done
+}
+
+# ------------------------------------------------------------------ 3) Profil / masaüstü
+step_desktop() {
+  local d
+  d="$(pick --radiolist "Masaüstü ortamı (yalnızca Workstation):" 15 68 3 \
+    "none"   "Kurma — yalnızca terminal" off \
+    "kde"    "KDE Plasma" on \
+    "gnome"  "GNOME" off)" || abort
+  case "$d" in
+    none)  desktop="" ;;
+    kde)   desktop=kde ;;
+    gnome) desktop=gnome ;;
+    *)     abort ;;
+  esac
+}
+
+step_software() {
+  local profiles=() items=() p i=0 pc
+  mapfile -t profiles < <(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort)
+  (( ${#profiles[@]} > 0 )) || { info "Profil bulunamadı: $PROFILE_DIR"; abort; }
+  for p in "${profiles[@]}"; do
+    i=$((i + 1))
+    items+=("$i" "$(profile_title "$p")")
+  done
+  pc="$(pick --menu "Kurulum profilini seç:" 18 76 "${#profiles[@]}" "${items[@]}")" || abort
+  profile="${profiles[10#$pc - 1]}"
+  if [[ "$profile" == workstation ]]; then
+    step_desktop
+  else
+    desktop=""
+  fi
+}
+
+# ------------------------------------------------------------------ 4) Root / kullanıcı
+tui_password() { # $1 etiket; PW_HASH globalini doldurur
+  local label="$1" p1 p2
+  while true; do
+    p1="$(pick --passwordbox "Parola ($label; en az 8 karakter, boş = vazgeç):" 10 72)" || return 1
+    [[ -n "$p1" ]] || return 1
+    if (( ${#p1} < 8 )); then info "En az 8 karakter olmalı."; continue; fi
+    p2="$(pick --passwordbox "Parolayı tekrar yaz ($label):" 10 72)" || return 1
+    [[ "$p1" == "$p2" ]] && break
+    info "Parolalar eşleşmiyor."
+  done
+  PW_HASH="$(printf '%s' "$p1" | openssl passwd -6 -stdin)" || return 1
+  [[ "$PW_HASH" == '$6$'* ]]
+}
+
+step_accounts() {
+  local choice u admin
+  while true; do
+    choice="$(pick --radiolist "Root hesabı:" 14 70 2 \
+      "lock" "Kilitli (önerilen; sudo'lu kullanıcı ile yönet)" on \
+      "pass" "Root parolası belirle" off)" || abort
+    if [[ "$choice" == "pass" ]]; then
+      tui_password "root" || { info "Root parolası alınamadı."; continue; }
+      root_hash="$PW_HASH"
+    else
+      root_hash=""
+    fi
+
+    u="$(pick --inputbox "Kullanıcı adı (boş = kullanıcı oluşturma):" 10 68 "")" || abort
+    username=""; user_hash=""; user_admin=1
+    if [[ -n "$u" ]]; then
+      if [[ ! "$u" =~ ^[a-z_][a-z0-9_-]{0,31}$ || "$u" == root ]]; then
+        info "Geçersiz kullanıcı adı.\nKüçük harf, rakam, '_' ve '-' kullan; 'root' kullanılamaz."
+        continue
+      fi
+      tui_password "kullanıcı $u" || { info "Parola alınamadı."; continue; }
+      user_hash="$PW_HASH"
+      admin="$(pick --radiolist "Yönetici (sudo) yetkisi?" 12 62 2 \
+        "yes" "Evet — wheel grubuna ekle" on \
+        "no"  "Hayır" off)" || abort
+      if [[ "$admin" == "yes" ]]; then user_admin=1; else user_admin=0; fi
+      username="$u"
+    fi
+
+    if admin_ok; then return 0; fi
+    info "Root kilitli ve sudo'lu kullanıcı yok.\nEn az bir yönetici hesabı gerekli."
+  done
+}
+
+# ------------------------------------------------------------------ 5) Disk
+step_disk() {
+  local lines=() items=() l i=0 pc name size model sec pm psz psz_gb plan
+  mapfile -t lines < <(list_disks)
+  (( ${#lines[@]} > 0 )) || { info "Kurulabilecek disk bulunamadı."; abort; }
+
+  for l in "${lines[@]}"; do
+    i=$((i + 1))
+    IFS=$'\t' read -r name size model sec <<<"$l"
+    items+=("$i" "$name  $(human_size "$size")  $model")
+  done
+  pc="$(pick --menu "Kurulum hedefini seç (kurulum ortamı gizlendi):" 18 78 "${#lines[@]}" "${items[@]}")" || abort
+  IFS=$'\t' read -r name size model sec <<<"${lines[10#$pc - 1]}"
+  if (( size < 8 * 1024 * 1024 * 1024 )); then
+    info "Disk çok küçük (en az 8 GB gerekir)."; abort
+  fi
+
+  pm="$(pick --radiolist "Bölümleme yöntemi:" 14 76 2 \
+    "full"    "Tüm diski sil ve otomatik bölümlendir" on \
+    "partial" "Mevcut bölümleri koru, boş alana kur" off)" || abort
+
+  if [[ "$pm" == "partial" ]]; then
+    while true; do
+      psz="$(pick --inputbox "Ayrılacak alan GB [100] (örn: 20, 20G, 100GB):" 10 72 "100")" || abort
+      psz="${psz//[[:space:]]/}"
+      [[ -z "$psz" ]] && psz="100"
+      psz_gb="${psz^^}"
+      psz_gb="${psz_gb%GIB}"; psz_gb="${psz_gb%GB}"; psz_gb="${psz_gb%G}"
+      if [[ ! "$psz_gb" =~ ^[0-9]+$ || ${#psz_gb} -gt 6 ]] || (( 10#$psz_gb < 8 )); then
+        info "Geçersiz boyut. En az 8 GB; örnek: 20, 20G veya 100GB."
+        continue
+      fi
+      psz=$(( 10#$psz_gb * 1024 ))   # MiB
+      if (( psz > size / 1024 / 1024 )); then
+        info "İstenen alan disk boyutundan büyük."
+        continue
+      fi
+      if ! plan="$(find_partial_plan "$name" "$psz")"; then
+        info "Yeterli boş alan bulunamadı.\nDiski küçültüp boş alan oluşturman gerekiyor."
+        continue
+      fi
+      IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
+      disk_mode="partial"
+      info "Plan: ${partial_start} MiB konumundan ${partial_size} MiB ($(( partial_size / 1024 )) GB) kullanılacak.\nEFI/boot: ${partial_esp:-bu alanın içinde yeni oluşturulacak}" 12 76
+      break
+    done
+  else
+    disk_mode="full"
+    partial_start=0; partial_size=0
+    partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
+  fi
+  disk="$name"; disk_bytes="$size"; disk_sec="$sec"
+}
+
+# ------------------------------------------------------------------ 6) Takas
+step_swap() {
+  local a v
+  a="$(pick --radiolist "Takas (swap) alanı:" 14 70 2 \
+    "on"  "Etkin — ${swap_mib} MiB swapfile" on \
+    "off" "Kapalı" off)" || abort
+  if [[ "$a" == "off" ]]; then swap_on=0; return 0; fi
+  swap_on=1
+  while true; do
+    v="$(pick --inputbox "Swap boyutu MiB [${swap_mib}] (0 = RAM'e göre otomatik):" 11 74 "$swap_mib")" || abort
+    [[ -z "$v" ]] && v="$swap_mib"
+    if [[ ! "$v" =~ ^[0-9]+$ ]]; then info "Geçersiz sayı."; continue; fi
+    v=$((10#$v))
+    if (( v == 0 )); then swap_mib="$(swap_size_for_ram)"; return 0; fi
+    if (( v >= 256 && v <= 65536 )); then swap_mib="$v"; return 0; fi
+    info "256 ile 65536 MiB arasında bir değer gir (veya 0 = otomatik)."
+  done
+}
+
+# ------------------------------------------------------------------ 7) Son onay
+step_final() {
+  local disk_v warn root_v user_v text
+  if [[ -n "$disk" ]]; then
+    if [[ "$disk_mode" == "partial" ]]; then
+      disk_v="$disk ($(human_size "$disk_bytes")) — ${partial_size} MiB, bölümler korunur"
+      warn="Mevcut bölümler korunacak; yalnızca seçilen boş alana kurulum yapılacak."
+    else
+      disk_v="$disk ($(human_size "$disk_bytes")) — TÜM DİSK SİLİNECEK"
+      warn="UYARI: $disk üzerindeki TÜM VERİLER SİLİNECEK. Bu işlem geri alınamaz."
+    fi
+  else
+    disk_v="seçilmedi"
+    warn="UYARI: Kurulum hedefi seçilmedi."
+  fi
+
+  if [[ -n "$root_hash" ]]; then root_v="parolalı"; else root_v="kilitli"; fi
+  user_v="${username:-oluşturulmadı}"
+  [[ -n "$username" ]] && (( user_admin )) && user_v+=" (sudo)"
+
+  text="KURULUM ÖZETİ\n\n"
+  text+="Ağ       : $net_state · $hostname_v\n"
+  text+="Bölge    : $kb · $timezone · $lang ($lang_src)\n"
+  text+="Yazılım  : $(profile_short "$profile") / $(desktop_label) · limon (temel)\n"
+  text+="Disk     : $disk_v\n"
+  text+="Hesap    : root $root_v · $user_v\n"
+  text+="Takas    : $(swap_label)\n"
+  text+="Sürücüler: $driver_note\n\n"
+  text+="$warn\n\n"
+  text+="Onaylarsan kurulum başlar."
+
+  confirm "$text" 24 78
+}
+
+# ------------------------------------------------------------------ akış
+tui_main() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "Kurulum aracı root olarak çalıştırılmalı." >&2
+    exit 1
+  fi
+  check_ui
+  if [[ -z "$DRYRUN" ]] && ! command -v archinstall >/dev/null; then
+    info "archinstall bulunamadı. ISO görüntüsü eksik olabilir."; exit 1
+  fi
+
+  profile="$(find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name common -printf '%f\n' 2>/dev/null | sort | head -n1)"
+  [[ -n "$profile" ]] || { info "Profil dizini bulunamadı: $PROFILE_DIR"; exit 1; }
+
+  trap cleanup EXIT
+  swap_mib="$(swap_size_for_ram)"
+  detect_drivers
+  extras=""                  # limon her kurulumda temel; provider isteğe bağlı
+
+  step_network
+  step_locale
+  step_software
+  step_accounts
+  step_disk
+  step_swap
+  if ! step_final; then
+    echo "Vazgeçildi." >&2
+    exit 130
+  fi
+  begin_install              # son onay alındı; arka uç kurulumu başlatır
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  tui_main "$@"
+fi

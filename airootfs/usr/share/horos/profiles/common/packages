@@ -1,6 +1,6 @@
 # Her profilde kurulan paketler
 nano
-nftables
+ufw
 openssh
 networkmanager
 

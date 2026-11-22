@@ -20,5 +20,7 @@ file_permissions=(
   ["/etc/sudoers.d/10-wheel"]="0:0:440"
   ["/root"]="0:0:750"
   ["/usr/local/bin/horos"]="0:0:755"
-  ["/usr/local/bin/horos-installer"]="0:0:755"
+  ["/usr/local/bin/horos-installer-core"]="0:0:644"
+  ["/usr/local/bin/horos-installer-tui"]="0:0:755"
+  ["/usr/local/bin/horos-tui-theme"]="0:0:644"
 )

@@ -1,0 +1,45 @@
+[Plymouth Theme]
+Name=HorOS
+Description=HorOS boot splash: transparent branding logo above a custom HorOS-coloured spinner
+ModuleName=two-step
+
+[two-step]
+Font=Adwaita Sans 12
+TitleFont=Adwaita Sans Light 30
+MonospaceFont=Adwaita Mono 12
+ImageDir=/usr/share/plymouth/themes/horos
+
+# Yatayda ortala. Dikeyde logo üstte, spinner altta, mesajlar en altta.
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.28
+HorizontalAlignment=.5
+VerticalAlignment=.62
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.80
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.80
+
+Transition=none
+TransitionDuration=0.0
+
+# Saf siyah zemin; logo ve marka rengi (#FDC41D) spinner öne çıksın.
+BackgroundStartColor=0x000000
+BackgroundEndColor=0x000000
+ProgressBarBackgroundColor=0x202020
+ProgressBarForegroundColor=0xFDC41D
+MessageBelowAnimation=true
+
+# Firmware (ACPI BGRT) logosu arka plana çizilmesin; sadece HorOS logosu görünsün.
+DialogClearsFirmwareBackground=true
+
+[boot-up]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=false

@@ -1,7 +1,9 @@
-export EDITOR=nano
-export VISUAL=nano
-alias ll='ls -lah'
+# HorOS root shell — yalnızca etkileşimli oturumlar.
 [[ $- == *i* ]] || return
-PS1='\[\e[1;33m\]horos\[\e[0m\]:\w\$ '
-printf '\nHorOS Linux | terminal-first Arch tabanlı ortam\n'
-printf 'Kurulum için: horos\n\n'
+
+export EDITOR="${EDITOR:-nano}"
+export VISUAL="${VISUAL:-$EDITOR}"
+
+alias ll='ls -lAh'
+
+PS1='\[\e[1;33m\]\u@\h\[\e[0m\]:\w\$ '

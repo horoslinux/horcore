@@ -19,6 +19,9 @@ HorOS is 64-bit only (no 32-bit/x86 support).
 Notes:
 
 - The installer downloads every package, so there is no offline installation; without a working connection it stops and asks you to configure the network.
+- tty1 opens the `whiptail` TUI wizard (Arch package: `libnewt`; network → IP-based locale → profile/desktop → accounts → disk → swap → final warning). The old numbered CLI menu and its script are removed; `horos-installer-core` is a backend library used only by the TUI.
+- TUI colors come from `horos-tui-theme` (amber HorOS palette). Use `HOROS_THEME=classic` for whiptail defaults or `HOROS_NEWT_COLORS='...'` for a custom newt palette.
+- Installed systems use `ufw` instead of nftables: incoming denied, outgoing allowed; the server profile opens SSH (22/tcp). Manage it with `sudo ufw status` and `sudo ufw allow <port>/tcp`.
 - The full-disk mode erases the selected disk; choose the partition-preserving mode at the installation destination step to install into free space. The live medium is hidden from the disk list. Back up your data first.
 - The live ISO runs from RAM (archiso), so a desktop installation with only 2 GB is slow; 4 GB is safer for KDE Plasma or GNOME.
 - An installed desktop feels comfortable with 4 GB or more, especially with a browser open. UEFI firmware must be 64-bit (32-bit UEFI is not supported).
@@ -44,6 +47,7 @@ sudo ./build.sh --keep # reuse work/ for a quick rebuild
 
 The ISO is written to the `out/` directory. The build workspace is in `work/`.
 Builds start clean by default because `mkarchiso` caches steps in `work/` and can silently skip profile changes.
+Boot uses the bundled HorOS Plymouth theme with `quiet splash`; systemd status messages are hidden (`Esc` shows details).
 
 ## Test
 

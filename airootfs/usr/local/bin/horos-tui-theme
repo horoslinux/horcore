@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# HorOS TUI — whiptail/newt renk paleti.
+# Bu dosya kaynaklanarak kullanılır; doğrudan çalıştırılmaz.
+#
+# Geçersiz kılma:
+#   HOROS_THEME=classic                 → whiptail varsayılan renkleri
+#   HOROS_NEWT_COLORS='root=,blue ...'  → tamamen özel palet
+#
+# Not: newt'in tanıdığı bileşen adları bunlardır; "text", "list", "radiobox",
+# "scrollbar" gibi adlar yok sayılır (whiptail bunları tanımaz).
+
+horos_theme() {
+  case "${HOROS_THEME:-horos}" in
+    none|classic|default)
+      unset NEWT_COLORS
+      return 0
+      ;;
+  esac
+
+  if [[ -n "${HOROS_NEWT_COLORS:-}" ]]; then
+    export NEWT_COLORS="$HOROS_NEWT_COLORS"
+    return 0
+  fi
+
+  # Ön plan, arka plan sırası. Sarı HorOS vurgu rengi (#FDC41D).
+  export NEWT_COLORS="root=,black
+border=yellow,black
+window=,black
+shadow=black,gray
+title=yellow,black
+roottext=yellow,black
+textbox=white,black
+acttextbox=black,yellow
+button=black,yellow
+actbutton=black,white
+compactbutton=yellow,black
+checkbox=yellow,black
+actcheckbox=black,yellow
+entry=white,black
+disentry=gray,black
+label=yellow,black
+listbox=white,black
+actlistbox=black,yellow
+sellistbox=white,black
+actsellistbox=black,yellow
+helpline=yellow,black
+emptyscale=,black
+fullscale=,yellow"
+}
