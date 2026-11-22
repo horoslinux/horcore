@@ -12,8 +12,6 @@ mkinitcpio-nfs-utils
 nbd
 
 # Boot (BIOS + UEFI)
-# plymouth: açılış splash ekranı (yerel horos teması initramfs'e eklenir)
-plymouth
 # edk2-shell: UEFI shell; mkarchiso otomatik olarak ISO'ya ekler
 syslinux
 edk2-shell
