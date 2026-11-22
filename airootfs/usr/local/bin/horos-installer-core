@@ -658,17 +658,23 @@ commands.append(
     "done; true"
 )
 
-# Marka varlıkları: uygulama simgesi, HorOS project menü kategorisi ve duvar kağıtları.
+# Marka varlıkları: uygulama simgesi, Yardım menüsündeki site kısayolu ve duvar kağıtları.
 icon_src = "/usr/share/horos/branding/horos-icon.png"
 wall_dir = "/usr/share/backgrounds/horos"   # live ve hedef sistemde ayni yol
-wallpapers = sorted(
-    p for p in glob.glob(os.path.join(wall_dir, "*"))
-    if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (".jpg", ".jpeg", ".png", ".webp")
-)
-# Varsayilan: horos-wallpaper-NN serisinin ilk gorseli (diger ek gorseller
-# listeye girer ama varsayilan olarak secilmez).
-branded = [p for p in wallpapers if os.path.basename(p).startswith("horos-wallpaper-")]
-wall_src = branded[0] if branded else (wallpapers[0] if wallpapers else "")
+# Sunucu profilinde masaustu ortami yok; duvar kagitlarini hedefe kopyalamak
+# ve GNOME/KDE listelerine kaydetmek gereksiz yere kurulumu buyutuyor.
+if profile == "server":
+    wallpapers = []
+    wall_src = ""
+else:
+    wallpapers = sorted(
+        p for p in glob.glob(os.path.join(wall_dir, "*"))
+        if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (".jpg", ".jpeg", ".png", ".webp")
+    )
+    # Varsayilan: horos-wallpaper-NN serisinin ilk gorseli (diger ek gorseller
+    # listeye girer ama varsayilan olarak secilmez).
+    branded = [p for p in wallpapers if os.path.basename(p).startswith("horos-wallpaper-")]
+    wall_src = branded[0] if branded else (wallpapers[0] if wallpapers else "")
 wall_dest = wall_src
 if os.path.isfile(icon_src):
     commands.append(write_cmd(icon_src, "/usr/share/pixmaps/horos.png", "644"))
@@ -676,33 +682,16 @@ if os.path.isfile(icon_src):
     commands.append(
         "mkdir -p /usr/share/applications && "
         + write_text("/usr/share/applications/horos.desktop",
-                     "[Desktop Entry]\nType=Application\nName=HorOS\nComment=HorOS Linux\n"
-                     "Exec=xdg-open https://horoslinux.github.io\nIcon=horos\n"
-                     "Categories=HorOS-project;\nTerminal=false\nStartupNotify=true\n")
+                     "[Desktop Entry]\nType=Application\nName=HorOS\nComment=HorOS Linux belgeleri\n"
+                     "Exec=xdg-open https://horoslinux.github.io/docs\nIcon=horos\n"
+                     "Categories=Help;\nTerminal=false\nStartupNotify=true\n")
         + " || true"
     )
-    # Freedesktop menü spec: uygulama "HorOS project" alt kategorisinde görünür.
-    menu_xml = "\n".join([
-        '<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"',
-        ' "http://www.freedesktop.org/standards/menu-spec/1.0/menu.dtd">',
-        '<Menu>',
-        '  <Name>Applications</Name>',
-        '  <Menu>',
-        '    <Name>HorOS-project</Name>',
-        '    <Directory>horos-project.directory</Directory>',
-        '    <Include>',
-        '      <Category>HorOS-project</Category>',
-        '    </Include>',
-        '  </Menu>',
-        '</Menu>',
-        '',
-    ])
-    commands.append(" && ".join([
-        "mkdir -p /usr/share/desktop-directories /etc/xdg/menus/applications-merged",
-        write_text("/usr/share/desktop-directories/horos-project.directory",
-                   "[Desktop Entry]\nType=Directory\nName=HorOS project\nIcon=horos\n"),
-        write_text("/etc/xdg/menus/applications-merged/horos.menu", menu_xml),
-    ]) + " || true")
+    # Eski kurulumlardan kalan "HorOS project" menü kategorisini temizle.
+    commands.append(
+        "rm -f /usr/share/desktop-directories/horos-project.directory "
+        "/etc/xdg/menus/applications-merged/horos.menu; true"
+    )
     add_post("arch-chroot \"$HOROS_ROOT\" gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true")
 # /usr/share/backgrounds/horos icindeki tum gorselleri once hedef sisteme kopyalar,
 # sonra GNOME ve KDE'nin "Arka plan" secenek listelerine kaydeder. Kanonik dosyalar
