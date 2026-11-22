@@ -45,6 +45,11 @@ sudo ./build.sh --keep # reuse work/ for a quick rebuild
 The ISO is written to the `out/` directory. The build workspace is in `work/`.
 Builds start clean by default because `mkarchiso` caches steps in `work/` and can silently skip profile changes.
 
+The boot splash is Plymouth with the local `horos` theme: the transparent logo from
+`airootfs/usr/share/horos/branding/logo.png` sits above the upstream spinner frames.
+`build.sh` copies the logo into `airootfs/usr/share/plymouth/themes/horos/watermark.png`
+on every build, so editing the branding logo is enough.
+
 ## Test
 
 ```bash

@@ -47,10 +47,20 @@ chmod +x "$ROOT"/airootfs/usr/local/bin/horos*
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
+BRAND_LOGO="$ROOT/airootfs/usr/share/horos/branding/logo.png"
 WALLPAPER_DIR="$ROOT/airootfs/usr/share/backgrounds/horos"
+PLYMOUTH_THEME_DIR="$ROOT/airootfs/usr/share/plymouth/themes/horos"
 if [[ ! -f "$BRAND_ICON" ]]; then
   echo "HATA: Marka dosyası eksik: $BRAND_ICON" >&2
   echo "      Dosyayı airootfs/usr/share/horos/branding/ altına koy." >&2
+  exit 1
+fi
+if [[ ! -f "$BRAND_LOGO" ]]; then
+  echo "HATA: Transparan logo eksik: $BRAND_LOGO" >&2
+  exit 1
+fi
+if [[ ! -f "$PLYMOUTH_THEME_DIR/horos.plymouth" ]]; then
+  echo "HATA: Plymouth teması eksik: $PLYMOUTH_THEME_DIR/horos.plymouth" >&2
   exit 1
 fi
 shopt -s nullglob
@@ -59,6 +69,14 @@ if (( ${#wallpapers[@]} != 20 )); then
   echo "HATA: 20 duvar kağıdı bekleniyor, ${#wallpapers[@]} bulundu: $WALLPAPER_DIR" >&2
   exit 1
 fi
+frames=("$PLYMOUTH_THEME_DIR"/animation-*.png)
+if (( ${#frames[@]} != 36 )); then
+  echo "HATA: 36 Plymouth spinner karesi bekleniyor, ${#frames[@]} bulundu: $PLYMOUTH_THEME_DIR" >&2
+  exit 1
+fi
+
+# Plymouth watermark'ı her build'de transparan logodan yenile.
+cp -f "$BRAND_LOGO" "$PLYMOUTH_THEME_DIR/watermark.png"
 
 # Simgeyi canlı sistemde de görünür yap (hicolor / pixmaps).
 ICON_DIR="$ROOT/airootfs/usr/share/icons/hicolor/512x512/apps"
