@@ -1197,6 +1197,14 @@ else:
              part(1025, total_mib - 1025 - 1, "ext4", [], "/")]
     wipe = True
 
+# Kurulum sonrasi koku ayirt etmek icin hedef sistemde bir isaret birakiriz.
+# apply_branding ve verify_boot yalnizca bu dosyayi tasiyan bolumu kullanir.
+# DIKKAT: write_text() staging'e yazar, staging ise kok bolum bulunduktan SONRA
+# kopyalanir. Bu yuzden isaret custom_command ile dogrudan hedefe yazilmalidir.
+commands.append(
+    "printf '%s\\n' " + shlex.quote(disk_dev) + " > /etc/horos-install-target; true"
+)
+
 # Sadece dosya yazan yer tutucu komutlar (":") logda goremeyelim.
 commands = [c for c in commands if c.strip() != ":"]
 
@@ -1217,10 +1225,6 @@ config = {
 fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
-
-# Cift sistemde dogru koku ayirt etmek icin hedef sistemde bir isaret birakiriz.
-# apply_branding ve verify_boot yalnizca bu dosyayi tasiyan bolumu kullanir.
-write_text("/etc/horos-install-target", disk_dev + "\n")
 
 # Rastgele staging yollari bash'a config'in yanisindaki kucuk meta dosyasiyla aktarilir.
 fd = os.open(out + ".branding", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

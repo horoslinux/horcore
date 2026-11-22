@@ -13,6 +13,7 @@ nbd
 
 # Boot (BIOS + UEFI)
 syslinux
+edk2-shell        # UEFI shell; mkarchiso otomatik olarak ISO'ya ekler
 memtest86+
 memtest86+-efi
 hwdata
@@ -23,6 +24,7 @@ usbutils
 
 # Network and terminal tools
 networkmanager
+iptables          # libxtables.so sağlayıcısını sabitle -> pacstrap'ta seçim sorusu çıkmaz
 xdg-utils
 wpa_supplicant
 iw
@@ -32,6 +34,7 @@ sudo
 nano
 htop
 git
+pv                # copytoram sırasında ilerleme çubuğu
 less
 man-db
 man-pages
