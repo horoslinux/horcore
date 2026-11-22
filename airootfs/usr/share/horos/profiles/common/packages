@@ -3,6 +3,7 @@ nano
 ufw
 openssh
 networkmanager
+plymouth
 
 # Günlük terminal araçları
 less

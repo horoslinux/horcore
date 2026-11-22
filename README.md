@@ -23,6 +23,7 @@ Notes:
 - TUI colors come from `horos-tui-theme` (amber HorOS palette). Use `HOROS_THEME=classic` for whiptail defaults or `HOROS_NEWT_COLORS='...'` for a custom newt palette.
 - Installed systems use `ufw` instead of nftables: incoming denied, outgoing allowed; the server profile opens SSH (22/tcp). Manage it with `sudo ufw status` and `sudo ufw allow <port>/tcp`.
 - Wallpaper assets are only copied for desktop profiles; the server profile skips them.
+- Installed systems keep the HorOS Plymouth theme (`quiet splash`, amber spinner) and the GDM login logo/background; the Arch default `bgrt` splash and logo are not left behind.
 - The full-disk mode erases the selected disk; choose the partition-preserving mode at the installation destination step to install into free space. The live medium is hidden from the disk list. Back up your data first.
 - The live ISO runs from RAM (archiso), so a desktop installation with only 2 GB is slow; 4 GB is safer for KDE Plasma or GNOME.
 - An installed desktop feels comfortable with 4 GB or more, especially with a browser open. UEFI firmware must be 64-bit (32-bit UEFI is not supported).
