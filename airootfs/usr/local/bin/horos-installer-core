@@ -33,14 +33,14 @@ driver_pkgs=""; driver_note="algılanmadı"
 # ---------------------------------------------------------------- yardımcılar
 # ICMP engellenmiş ağlarda yanlış "bağlantı yok" dememek için ping + HTTPS denetimi.
 have_net() {
-  ping -c1 -W2 archlinux.org &>/dev/null && return 0
-  curl -fsS --max-time 4 -o /dev/null https://archlinux.org/ &>/dev/null
+  ping -c1 -W1 archlinux.org &>/dev/null && return 0
+  curl -fsS --max-time 2 -o /dev/null https://archlinux.org/ &>/dev/null
 }
 
 ip_lookup() { # $1: alan (timezone | country)
   local url val
   for url in "https://ipapi.co/$1" "https://ipinfo.io/$1"; do
-    val="$(curl -fsS --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')" || continue
+    val="$(curl -fsS --max-time 2 "$url" 2>/dev/null | tr -d '[:space:]')" || continue
     if [[ "$val" =~ ^[A-Za-z0-9_+/-]+$ ]]; then echo "$val"; return 0; fi
   done
   return 1
@@ -670,6 +670,11 @@ commands.append(
 
 # Marka varlıkları: uygulama simgesi, Yardım menüsündeki site kısayolu ve duvar kağıtları.
 icon_src = "/usr/share/horos/branding/horos-icon.png"
+# GDM kare uygulama simgesini olduğu gibi gösterir; giriş ekranı için transparan
+# yatay logo'nun kırpılıp küçültülmüş hâlini kullanıyoruz.
+login_logo_src = "/usr/share/horos/branding/horos-login-logo.png"
+if not os.path.isfile(login_logo_src):
+    login_logo_src = "/usr/share/horos/branding/logo.png"
 wall_dir = "/usr/share/backgrounds/horos"   # live ve hedef sistemde ayni yol
 # Sunucu profilinde masaustu ortami yok; duvar kagitlarini hedefe kopyalamak
 # ve GNOME/KDE listelerine kaydetmek gereksiz yere kurulumu buyutuyor.
@@ -705,7 +710,7 @@ if os.path.isfile(icon_src):
     # GDM giriş ekranındaki Arch logosunu HorOS logosuyla değiştir.
     # Arch, varsayılanı /usr/share/gdm/greeter-dconf-defaults içinde tutar;
     # system-db:gdm katmanı onu geçersiz kılar.
-    commands.append(write_cmd(icon_src, "/usr/share/pixmaps/horos-logo.png", "644"))
+    commands.append(write_cmd(login_logo_src, "/usr/share/pixmaps/horos-logo.png", "644"))
     commands.append(write_text("/etc/dconf/profile/gdm",
                                "user-db:user\n"
                                "system-db:gdm\n"

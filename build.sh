@@ -60,12 +60,15 @@ fi
 
 # Marka varlıkları (kurulan sisteme de kopyalanır).
 BRAND_ICON="$ROOT/airootfs/usr/share/horos/branding/horos-icon.png"
+BRAND_LOGIN_LOGO="$ROOT/airootfs/usr/share/horos/branding/horos-login-logo.png"
 WALLPAPER_DIR="$ROOT/airootfs/usr/share/backgrounds/horos"
-if [[ ! -f "$BRAND_ICON" ]]; then
-  echo "HATA: Marka dosyası eksik: $BRAND_ICON" >&2
-  echo "      Dosyayı airootfs/usr/share/horos/branding/ altına koy." >&2
-  exit 1
-fi
+for brand_file in "$BRAND_ICON" "$BRAND_LOGIN_LOGO"; do
+  if [[ ! -f "$brand_file" ]]; then
+    echo "HATA: Marka dosyası eksik: $brand_file" >&2
+    echo "      Dosyayı airootfs/usr/share/horos/branding/ altına koy." >&2
+    exit 1
+  fi
+done
 shopt -s nullglob
 wallpapers=("$WALLPAPER_DIR"/horos-wallpaper-*.jpg)
 if (( ${#wallpapers[@]} == 0 )); then
