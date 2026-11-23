@@ -63,21 +63,138 @@ set_hostname_tui() {
   done
 }
 
+# ------------------------------------------------------------------ Wi-Fi (kolay mod)
+# nmtui'ye göndermeden tarama + seçim + parola akışını whiptail içinde yapar.
+wifi_iface() {
+  nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2 == "wifi" { print $1; exit }'
+}
+
+wifi_is_connected() { # $1 aygıt
+  local state
+  state="$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | awk -F: -v d="$1" '$1 == d { print $2; exit }')"
+  [[ "$state" == "connected" ]]
+}
+
+wifi_connect_once() { # $1 aygıt, $2 SSID, $3 parola (opsiyonel)
+  local iface="$1" ssid="$2" pass="${3-}" out rc
+  if [[ -n "$pass" ]]; then
+    out="$(nmcli device wifi connect "$ssid" password "$pass" ifname "$iface" 2>&1)"; rc=$?
+  else
+    out="$(nmcli device wifi connect "$ssid" ifname "$iface" 2>&1)"; rc=$?
+  fi
+  if (( rc != 0 )); then
+    printf '%s\n' "$out"
+    return 1
+  fi
+  # nmcli bağlantıyı kurarken IP'yi bekler; yine de kısa bir doğrulama yap.
+  for _ in 1 2 3; do
+    wifi_is_connected "$iface" && return 0
+    sleep 1
+  done
+  printf '%s\n' "${out:-Bağlantı kuruldu ancak aygıt hazır olmadı.}"
+  return 1
+}
+
+wifi_connect_tui() {
+  local iface line rest ssid sig sec inuse choice pass out
+  local -a rows=() items=() ssids=() secs=() args=()
+  local i=0
+
+  iface="$(wifi_iface)"
+  if [[ -z "$iface" ]]; then
+    info "Bu makinede Wi-Fi aygıtı bulunamadı.\nEthernet bağlıysa doğrudan devam edebilirsin." 10 68
+    return 0
+  fi
+  nmcli radio wifi on >/dev/null 2>&1 || true
+
+  while true; do
+    mapfile -t rows < <(nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY device wifi list ifname "$iface" --rescan auto 2>/dev/null)
+    items=(); ssids=(); secs=(); i=0
+    for line in "${rows[@]}"; do
+      [[ -n "$line" ]] || continue
+      # SSID'nin içinde ':' olabilir; sağdan SIGNAL/SECURITY'yi ayır, kalanı SSID yap.
+      inuse="${line%%:*}"; rest="${line#*:}"
+      sec="${rest##*:}"; rest="${rest%:*}"
+      sig="${rest##*:}"; ssid="${rest%:*}"
+      [[ -n "$ssid" ]] || continue   # gizli ağlar listeye girmez
+      i=$((i + 1))
+      items+=("$i" "$(printf '%-26.26s  %3s%%  %-8.8s%s' "$ssid" "${sig:-0}" "${sec:---}" "${inuse:+  *}")")
+      ssids[$i]="$ssid"; secs[$i]="$sec"
+    done
+
+    args=(--menu "Wi-Fi ağı seç ($iface)\n\n* = şu an bağlı olunan ağ\nSinyal yüzdesi ve güvenlik türü gösterilir." 22 76 12)
+    (( i > 0 )) && args+=("${items[@]}")
+    args+=(
+      r "Listeyi yeniden tara"
+      m "Ağ adını elle yaz (gizli ağ)"
+      n "nmtui ile gelişmiş ayarlar"
+      b "Geri dön"
+    )
+    choice="$(pick "${args[@]}")" || return 0
+
+    case "$choice" in
+      r) continue ;;
+      b) return 0 ;;
+      n) nmtui || true; return 0 ;;
+      m)
+        ssid="$(pick --inputbox "Ağ adı (SSID):" 9 62)" || continue
+        [[ -n "$ssid" ]] || continue
+        sec="WPA"
+        ;;
+      *)
+        ssid="${ssids[10#$choice]-}"
+        sec="${secs[10#$choice]-}"
+        [[ -n "$ssid" ]] || continue
+        ;;
+    esac
+
+    # Açık ağ veya kayıtlı profil: parola sormadan dene.
+    if out="$(wifi_connect_once "$iface" "$ssid" 2>&1)"; then
+      net_state="Bağlı"
+      info "Bağlandı: $ssid\n\nAğ durumu güncellendi; kuruluma devam edebilirsin." 10 68
+      return 0
+    fi
+
+    # Parola korumalı ağ: ilk deneme kayıtlı profille başarısız oldu.
+    if [[ "$sec" != "--" && -n "$sec" ]]; then
+      pass="$(pick --passwordbox "\"$ssid\" parolası (en az 8 karakter):" 10 72)" || continue
+      if (( ${#pass} < 8 )); then
+        info "Wi-Fi parolası en az 8 karakter olmalı."; continue
+      fi
+      if out="$(wifi_connect_once "$iface" "$ssid" "$pass" 2>&1)"; then
+        net_state="Bağlı"
+        info "Bağlandı: $ssid\n\nAğ durumu güncellendi; kuruluma devam edebilirsin." 10 68
+        return 0
+      fi
+    fi
+
+    info "Bağlanamadı: $ssid\n\n$(printf '%s' "$out" | tail -n 6)\n\nSSID/parolayı denetleyip tekrar dene." 14 76
+  done
+}
+
 step_network() {
   local choice msg
+  local -a args=()
   while true; do
     if have_net; then net_state="Bağlı"; else net_state="Bağlı değil"; fi
-    msg="Kurulum için internet bağlantısı gerekir.\n\nAğ durumu : $net_state\nMakine adı: $hostname_v\n\nBağlantı yoksa önce nmtui ile Wi-Fi/Ethernet ayarını yap."
-    choice="$(pick --menu "$msg" 18 72 4 \
-      "1" "Ağ durumunu yeniden denetle" \
-      "2" "Ağı yapılandır (nmtui)" \
-      "3" "Makine adını ayarla ($hostname_v)" \
-      "4" "Devam et")" || abort
+    msg="Kurulum için internet bağlantısı gerekir.\n\nAğ durumu : $net_state\nMakine adı: $hostname_v\n\nWi-Fi için ağ seçip parolayı yazman yeterli; gelişmiş ayarlar nmtui'de."
+    args=()
+    [[ "$net_state" != "Bağlı" ]] && args+=(--default-item 2)
+    args+=(
+      --menu "$msg" 19 74 5
+      "1" "Ağ durumunu yeniden denetle"
+      "2" "Wi-Fi ağına bağlan (kolay)"
+      "3" "Ağı yapılandır (nmtui — gelişmiş)"
+      "4" "Makine adını ayarla ($hostname_v)"
+      "5" "Devam et"
+    )
+    choice="$(pick "${args[@]}")" || abort
     case "$choice" in
       1) continue ;;
-      2) nmtui || true; continue ;;
-      3) set_hostname_tui ;;
-      4) return 0 ;;
+      2) wifi_connect_tui ;;
+      3) nmtui || true; continue ;;
+      4) set_hostname_tui ;;
+      5) return 0 ;;
       *) abort ;;
     esac
   done
