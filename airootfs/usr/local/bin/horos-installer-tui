@@ -363,6 +363,45 @@ step_accounts() {
 }
 
 # ------------------------------------------------------------------ 5) Disk
+# Mevcut bir bölümü kök olarak seçer; ESP varsa korunup /boot olarak bağlanır.
+select_existing_partition_tui() {
+  local dev="$1" choice l pdev psz pfs plabel esp esp_fs
+  local -a lines=() items=()
+  while true; do
+    mapfile -t lines < <(list_partitions "$dev")
+    if (( ${#lines[@]} == 0 )); then
+      info "Bu diskte bölüm bulunamadı." 10 68
+      return 1
+    fi
+    items=()
+    for l in "${lines[@]}"; do
+      IFS=$'\t' read -r pdev psz pfs plabel <<<"$l"
+      items+=("$pdev" "${pdev##*/}  $(human_size "$psz")  $pfs  $plabel")
+    done
+    choice="$(pick --menu "Formatlanacak bölümü seç ($dev):\n\nDiğer bölümlere dokunulmaz." 19 78 "${#lines[@]}" "${items[@]}")" || return 1
+    confirm "UYARI: $choice içindeki TÜM VERİLER SİLİNECEK.\n\nBu bölüm ext4 olarak formatlanıp HorOS kökü olacak.\nDevam edilsin mi?" 13 76 || continue
+
+    existing_part="$choice"
+    existing_esp=""
+    mapfile -t esp < <(find_esp_dev "$dev")
+    if (( ${#esp[@]} > 0 )); then
+      IFS=$'\t' read -r existing_esp esp_fs <<<"${esp[0]}"
+    fi
+    if is_efi && [[ -z "$existing_esp" ]]; then
+      info "UEFI için EFI/boot bölümü bulunamadı.\nBu modda önyükleyici kurulamaz; başka bir yöntem seç." 11 72
+      return 1
+    fi
+    if [[ -n "$existing_esp" && "$existing_esp" == "$choice" ]]; then
+      info "Seçilen bölüm EFI/boot bölümü. Kök olarak kullanılamaz.\nFarklı bir bölüm seç." 10 72
+      continue
+    fi
+    if [[ -n "$existing_esp" ]]; then
+      info "EFI/boot bölümü formatlanmadan /boot olarak bağlanacak:\n$existing_esp" 10 72
+    fi
+    return 0
+  done
+}
+
 step_disk() {
   local lines=() items=() spaces=() sitems=() l i=0 pc name size model sec pm psz psz_gb plan
   local st sz chosen_start
@@ -380,57 +419,70 @@ step_disk() {
     info "Disk çok küçük (en az 8 GB gerekir)."; abort
   fi
 
-  pm="$(pick --radiolist "Bölümleme yöntemi:" 14 76 2 \
-    "full"    "Tüm diski sil ve otomatik bölümlendir" on \
-    "partial" "Mevcut bölümleri koru, boş alana kur" off)" || abort
+  while true; do
+    pm="$(pick --radiolist "Bölümleme yöntemi:" 16 80 3 \
+      "full"     "Tüm diski sil ve otomatik bölümlendir" on \
+      "partial"  "Mevcut bölümleri koru, boş alana kur" off \
+      "existing" "Mevcut bölümü kullan (FORMATLANIR — diğerleri korunur)" off)" || abort
 
-  if [[ "$pm" == "partial" ]]; then
-    while true; do
-      psz="$(pick --inputbox "Ayrılacak alan GB [100] (örn: 20, 20G, 100GB):" 10 72 "100")" || abort
-      psz="${psz//[[:space:]]/}"
-      [[ -z "$psz" ]] && psz="100"
-      psz_gb="${psz^^}"
-      psz_gb="${psz_gb%GIB}"; psz_gb="${psz_gb%GB}"; psz_gb="${psz_gb%G}"
-      if [[ ! "$psz_gb" =~ ^[0-9]+$ || ${#psz_gb} -gt 6 ]] || (( 10#$psz_gb < 8 )); then
-        info "Geçersiz boyut. En az 8 GB; örnek: 20, 20G veya 100GB."
-        continue
-      fi
-      psz=$(( 10#$psz_gb * 1024 ))   # MiB
-      if (( psz > size / 1024 / 1024 )); then
-        info "İstenen alan disk boyutundan büyük."
-        continue
-      fi
-      # Kullanılabilir boş alanları listele; birden fazla varsa kullanıcı seçer.
-      mapfile -t spaces < <(list_partial_spaces "$name")
-      if (( ${#spaces[@]} == 0 )); then
-        info "Bu diskte en az 8 GB'lık boş alan yok.\nVar olan bir bölümü küçültüp boş alan oluşturman gerekiyor."
-        continue
-      fi
-      chosen_start=""
-      if (( ${#spaces[@]} > 1 )); then
-        sitems=()
-        for l in "${spaces[@]}"; do
-          IFS=$'\t' read -r st sz <<<"$l"
-          sitems+=("$st" "${st} MiB konumundan $(( sz / 1024 )) GB boş alan")
-        done
-        chosen_start="$(pick --menu "Boş alan seç ($name):" 18 74 "${#spaces[@]}" "${sitems[@]}")" || abort
-      else
-        IFS=$'\t' read -r chosen_start sz <<<"${spaces[0]}"
-      fi
-      if ! plan="$(find_partial_plan "$name" "$psz" "$chosen_start")"; then
-        info "Seçilen boş alan planlanamadı.\nFarklı bir alan veya boyut dene."
-        continue
-      fi
-      IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
-      disk_mode="partial"
-      info "Plan: ${partial_start} MiB konumundan ${partial_size} MiB ($(( partial_size / 1024 )) GB) kullanılacak.\nEFI/boot: ${partial_esp:-bu alanın içinde yeni oluşturulacak}" 12 76
+    if [[ "$pm" == "partial" ]]; then
+      while true; do
+        psz="$(pick --inputbox "Ayrılacak alan GB [100] (örn: 20, 20G, 100GB):" 10 72 "100")" || abort
+        psz="${psz//[[:space:]]/}"
+        [[ -z "$psz" ]] && psz="100"
+        psz_gb="${psz^^}"
+        psz_gb="${psz_gb%GIB}"; psz_gb="${psz_gb%GB}"; psz_gb="${psz_gb%G}"
+        if [[ ! "$psz_gb" =~ ^[0-9]+$ || ${#psz_gb} -gt 6 ]] || (( 10#$psz_gb < 8 )); then
+          info "Geçersiz boyut. En az 8 GB; örnek: 20, 20G veya 100GB."
+          continue
+        fi
+        psz=$(( 10#$psz_gb * 1024 ))   # MiB
+        if (( psz > size / 1024 / 1024 )); then
+          info "İstenen alan disk boyutundan büyük."
+          continue
+        fi
+        # Kullanılabilir boş alanları listele; birden fazla varsa kullanıcı seçer.
+        mapfile -t spaces < <(list_partial_spaces "$name")
+        if (( ${#spaces[@]} == 0 )); then
+          info "Bu diskte en az 8 GB'lık boş alan yok.\nVar olan bir bölümü küçültüp boş alan oluşturman gerekiyor."
+          continue
+        fi
+        chosen_start=""
+        if (( ${#spaces[@]} > 1 )); then
+          sitems=()
+          for l in "${spaces[@]}"; do
+            IFS=$'\t' read -r st sz <<<"$l"
+            sitems+=("$st" "${st} MiB konumundan $(( sz / 1024 )) GB boş alan")
+          done
+          chosen_start="$(pick --menu "Boş alan seç ($name):" 18 74 "${#spaces[@]}" "${sitems[@]}")" || abort
+        else
+          IFS=$'\t' read -r chosen_start sz <<<"${spaces[0]}"
+        fi
+        if ! plan="$(find_partial_plan "$name" "$psz" "$chosen_start")"; then
+          info "Seçilen boş alan planlanamadı.\nFarklı bir alan veya boyut dene."
+          continue
+        fi
+        IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
+        disk_mode="partial"
+        existing_part=""; existing_esp=""
+        info "Plan: ${partial_start} MiB konumundan ${partial_size} MiB ($(( partial_size / 1024 )) GB) kullanılacak.\nEFI/boot: ${partial_esp:-bu alanın içinde yeni oluşturulacak}" 12 76
+        break
+      done
       break
-    done
-  else
-    disk_mode="full"
-    partial_start=0; partial_size=0
-    partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
-  fi
+    elif [[ "$pm" == "existing" ]]; then
+      if select_existing_partition_tui "$name"; then
+        disk_mode="existing"
+        break
+      fi
+      continue
+    else
+      disk_mode="full"
+      partial_start=0; partial_size=0
+      partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
+      existing_part=""; existing_esp=""
+      break
+    fi
+  done
   disk="$name"; disk_bytes="$size"; disk_sec="$sec"
 }
 
@@ -460,6 +512,9 @@ step_final() {
     if [[ "$disk_mode" == "partial" ]]; then
       disk_v="$disk ($(human_size "$disk_bytes")) — ${partial_size} MiB, bölümler korunur"
       warn="Mevcut bölümler korunacak; yalnızca seçilen boş alana kurulum yapılacak."
+    elif [[ "$disk_mode" == "existing" ]]; then
+      disk_v="$disk — $existing_part FORMATLANACAK, diğer bölümler korunur"
+      warn="UYARI: $existing_part üzerindeki TÜM VERİLER SİLİNECEK.\nEFI/boot: ${existing_esp:-yok}"
     else
       disk_v="$disk ($(human_size "$disk_bytes")) — TÜM DİSK SİLİNECEK"
       warn="UYARI: $disk üzerindeki TÜM VERİLER SİLİNECEK. Bu işlem geri alınamaz."

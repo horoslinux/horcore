@@ -20,6 +20,8 @@ disk=""; disk_bytes=0; disk_sec=512
 # Kurulum modu: "full" = tüm diski sil; "partial" = mevcut bölümleri koru, boş alana kur.
 disk_mode="full"; partial_start=0; partial_size=0
 partial_esp=""; partial_esp_start=0; partial_esp_size=0; partial_esp_fs="fat32"
+# "existing" modu: seçilen bölüm formatlanır, diğer bölümlere dokunulmaz.
+existing_part=""; existing_esp=""
 hostname_v="horos"; net_state="denetleniyor..."
 root_hash=""; username=""; user_hash=""; user_admin=1
 PW_HASH=""
@@ -383,7 +385,84 @@ print(start, size, esp, esp_start, esp_size, esp_fs, sep="\t")
 PY
 }
 
+# Hedef diskteki bölümler: aygıt \t bayt \t dosya sistemi \t etiket
+list_partitions() { # $1 disk
+  python3 - "$1" <<'PY'
+import json, subprocess, sys
+disk = sys.argv[1]
+raw = subprocess.run(
+    ["lsblk", "-J", "-b", "-p", "-o", "NAME,SIZE,FSTYPE,LABEL,TYPE"],
+    capture_output=True, text=True).stdout
+for d in json.loads(raw or '{"blockdevices": []}')["blockdevices"]:
+    if d.get("name") != disk:
+        continue
+    for p in d.get("children") or []:
+        if p.get("type") != "part":
+            continue
+        print("\t".join([
+            p.get("name") or "", str(p.get("size") or 0),
+            p.get("fstype") or "-", p.get("label") or "-"]))
+PY
+}
 
+# Diskteki EFI/boot bölümünü bulur: aygıt \t dosya sistemi
+find_esp_dev() { # $1 disk
+  python3 - "$1" <<'PY'
+import json, subprocess, sys
+disk = sys.argv[1]
+try:
+    out = subprocess.run(["parted", "-js", disk, "unit", "MiB", "print"],
+                         capture_output=True, text=True, check=True)
+    data = json.loads(out.stdout)
+    parts = (data.get("disk") or data).get("partitions", [])
+except Exception:
+    sys.exit(1)
+def path(number):
+    return f"{disk}p{number}" if disk[-1].isdigit() else f"{disk}{number}"
+for p in parts:
+    if str(p.get("type", "")).lower() == "free":
+        continue
+    flags = [str(f).lower() for f in (p.get("flags") or [])]
+    fs = str(p.get("fs_type") or "fat32").lower().replace("vfat", "fat32")
+    if "esp" in flags or ("boot" in flags and fs.startswith("fat")):
+        number = p.get("number")
+        if number:
+            print(path(str(number)), fs, sep="\t")
+            break
+PY
+}
+
+# Seçilen bölümü formatlayıp archinstall'ın pre-mount kökü olarak hazırlar.
+# ESP varsa formatlanmadan /boot'a bağlanır (çift sistemde Windows boot korunur).
+prepare_existing_target() { # $1 kök bölüm, $2 ESP (opsiyonel)
+  local part="$1" esp="${2-}" out
+  [[ -n "$part" && -b "$part" ]] || {
+    echo "HATA: Geçerli bir bölüm seçilmedi: $part" >&2; return 1
+  }
+  echo "Seçilen bölüm formatlanıyor: $part"
+  umount -f "$part" 2>/dev/null || true
+  wipefs -a "$part" >/dev/null 2>&1 || true
+  if ! out="$(mkfs.ext4 -F -L HorOS "$part" 2>&1)"; then
+    echo "HATA: $part formatlanamadı." >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  mkdir -p /mnt || return 1
+  if ! mount "$part" /mnt; then
+    echo "HATA: $part /mnt içine bağlanamadı." >&2
+    return 1
+  fi
+  if [[ -n "$esp" && -b "$esp" ]]; then
+    umount -f "$esp" 2>/dev/null || true
+    mkdir -p /mnt/boot || { umount /mnt; return 1; }
+    if ! mount "$esp" /mnt/boot; then
+      echo "UYARI: $esp /boot içine bağlanamadı." >&2
+      umount /mnt 2>/dev/null || true
+      return 1
+    fi
+  fi
+  return 0
+}
 
 # Parolayı iki kez sorar; SHA-512 crypt ($6$) özetini PW_HASH'e yazar. Boş giriş = vazgeç.
 
@@ -462,7 +541,7 @@ generate_config() { # $1: çıktı dosyası
   H_SEC="$disk_sec" H_EFI="$efi" H_WIFI="$wifi" H_USER="$username" H_USERHASH="$user_hash" \
   H_ADMIN="$user_admin" H_ROOTHASH="$root_hash" \
   H_MODE="$disk_mode" H_PART_START="$partial_start" H_PART_SIZE="$partial_size" \
-  H_ESP_DEV="$partial_esp" H_ESP_START="$partial_esp_start" H_ESP_SIZE="$partial_esp_size" \
+  H_ESP_DEV="${partial_esp:-$existing_esp}" H_ESP_START="$partial_esp_start" H_ESP_SIZE="$partial_esp_size" \
   H_ESP_FS="$partial_esp_fs" \
   H_SWAP="$swap_on" H_SWAP_MIB="$swap_mib" H_DRIVERS="$driver_pkgs" \
   python3 - "$1" <<'PY'
@@ -487,7 +566,7 @@ esp_start = int(E.get("H_ESP_START") or 0)
 esp_size = int(E.get("H_ESP_SIZE") or 0)
 esp_fs = E.get("H_ESP_FS") or "fat32"
 # Paylaşılan ESP'de Windows'un /EFI/BOOT fallback dosyasına dokunma.
-removable_efi = not (mode == "partial" and esp_dev)
+removable_efi = not (mode in ("partial", "existing") and esp_dev)
 if esp_fs not in ("fat32", "fat16"):
     esp_fs = "fat32"
 
@@ -955,7 +1034,12 @@ def part(start, size, fs, flags, mount, status="create", dev=None):
     }
 
 
-if mode == "partial" and part_size >= 8192 and part_start >= 1:
+if mode == "existing":
+    # Kök bölüm ve varsa ESP bash tarafında formatlanıp /mnt'e bağlandı.
+    # archinstall pre-mount modunda bölüm tablosuna dokunmaz.
+    parts = []
+    wipe = False
+elif mode == "partial" and part_size >= 8192 and part_start >= 1:
     parts = []
     boot_flags = ["boot", "esp"] if efi else ["boot"]
     if esp_dev:
@@ -997,10 +1081,14 @@ config = {
     "custom_commands": commands,
     "timezone": E["H_TZ"] or "UTC",
     "locale_config": {"kb_layout": E["H_KB"], "sys_lang": lang, "sys_enc": enc},
-    "disk_config": {
-        "config_type": "default_layout",
-        "device_modifications": [{"device": E["H_DISK"], "partitions": parts, "wipe": wipe}],
-    },
+    "disk_config": (
+        {"config_type": "pre_mounted_config", "mountpoint": "/mnt"}
+        if mode == "existing" else
+        {
+            "config_type": "default_layout",
+            "device_modifications": [{"device": E["H_DISK"], "partitions": parts, "wipe": wipe}],
+        }
+    ),
 }
 fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1111,15 +1199,17 @@ verify_boot() {
   release_target || true
 
   mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}')
-  if (( ${#parts[@]} < 2 )); then
+  local min_parts=1
+  [[ "$disk_mode" == "full" ]] && min_parts=2
+  if (( ${#parts[@]} < min_parts )); then
     echo "${R}UYARI:${N} $disk üzerinde beklenen bölümler bulunamadı."; return 1
   fi
   m="$(mktemp -d /tmp/horos-verify.XXXXXX)"
   MOUNT_DIRS+=("$m")
   mount_err="$(mktemp /tmp/horos-verify-mount.XXXXXX)"
 
-  if [[ "$disk_mode" == "partial" ]]; then
-    # Kısmi kurulumda bölüm sırası değişir; kökü ve boot'u içeriğinden bul.
+  if [[ "$disk_mode" != "full" ]]; then
+    # Kısmi/mevcut bölüm kurulumunda bölüm sırası değişir; kökü ve boot'u içeriğinden bul.
     local p candidate=""
     for p in "${parts[@]}"; do
       mount -o ro "$p" "$m" 2>/dev/null || continue
@@ -1166,7 +1256,9 @@ verify_boot() {
   fi
 
   [[ -d "$m/boot" ]] || mkdir -p "$m/boot" 2>/dev/null || problems+=("boot dizini oluşturulamadı")
-  mount -o ro "$boot" "$m/boot" 2>/dev/null || problems+=("boot bölümü ($boot) bağlanamadı")
+  if [[ -n "$boot" && "$boot" != "$root" ]]; then
+    mount -o ro "$boot" "$m/boot" 2>/dev/null || problems+=("boot bölümü ($boot) bağlanamadı")
+  fi
   compgen -G "$m/boot/vmlinuz-*" >/dev/null || problems+=("çekirdek yok (/boot/vmlinuz-*)")
   compgen -G "$m/boot/initramfs-*.img" >/dev/null || problems+=("initramfs yok (/boot/initramfs-*.img)")
   [[ -f "$m/boot/grub/grub.cfg" || -f "$m/boot/loader/loader.conf" ]] \
@@ -1196,6 +1288,7 @@ verify_boot() {
 begin_install() { # TUI son onayı zaten aldı; burada INSTALL onayı sorulmaz.
   local missing=()
   [[ -z "$disk" ]] && missing+=("Kurulum hedefi")
+  [[ "$disk_mode" == "existing" && -z "$existing_part" ]] && missing+=("Formatlanacak bölüm")
   admin_ok || missing+=("Yönetici hesap (kullanıcı oluştur veya root parolası belirle)")
   if [[ -z "$DRYRUN" ]]; then
     echo "Ağ denetleniyor..."
@@ -1215,6 +1308,8 @@ begin_install() { # TUI son onayı zaten aldı; burada INSTALL onayı sorulmaz.
   echo "  Masaüstü    : $(desktop_label)"
   if [[ "$disk_mode" == "partial" ]]; then
     echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${G}${partial_size} MiB alan, mevcut bölümler korunur${N}"
+  elif [[ "$disk_mode" == "existing" ]]; then
+    echo "  Disk        : $disk — ${R}$existing_part FORMATLANACAK${N}, diğer bölümler korunur"
   else
     echo "  Disk        : $disk ($(human_size "$disk_bytes")) — ${R}TÜM VERİLER SİLİNECEK${N}"
   fi
@@ -1260,6 +1355,14 @@ begin_install() { # TUI son onayı zaten aldı; burada INSTALL onayı sorulmaz.
     rm -rf "$BRAND_STAGE"; rm -f "$BRAND_POST" "$BRAND_META" "$CFG"
     BRAND_STAGE=""; BRAND_POST=""; BRAND_META=""; CFG=""
     return 1
+  fi
+  if [[ "$disk_mode" == "existing" ]]; then
+    if ! prepare_existing_target "$existing_part" "$existing_esp"; then
+      release_target || true
+      rm -rf "$BRAND_STAGE"; rm -f "$BRAND_POST" "$BRAND_META" "$CFG"
+      BRAND_STAGE=""; BRAND_POST=""; BRAND_META=""; CFG=""
+      return 1
+    fi
   fi
 
   echo
