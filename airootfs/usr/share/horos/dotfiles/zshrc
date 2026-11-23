@@ -27,8 +27,22 @@ zstyle ':completion:*' menu select
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
 
-# --- İstem: tek satır, sade ------------------------------------------------
-PROMPT='%F{2}%n%f@%F{4}%m%f:%F{3}%~%f %# '
+# --- Tema: HorOS (tek satır, amber) ----------------------------------------
+# Ek paket gerekmez; git bilgisi zsh'in yerleşik vcs_info modülünden gelir.
+# Dirty göstergeleri: + staged, ! unstaged. Son karakter başarılı komutta
+# amber, hatalı komutta kırmızı; root için #, kullanıcı için % görünür.
+autoload -Uz vcs_info
+zstyle ':vcs_info:*' enable git
+zstyle ':vcs_info:git:*' check-for-changes true
+zstyle ':vcs_info:git:*' stagedstr '+'
+zstyle ':vcs_info:git:*' unstagedstr '!'
+zstyle ':vcs_info:git:*' formats ' %F{8}(%F{214}%b%F{8}%u%c)%f'
+zstyle ':vcs_info:git:*' actionformats ' %F{8}(%F{214}%b|%a%F{8}%u%c)%f'
+precmd_functions+=(horos_precmd)
+horos_precmd() { vcs_info }
+
+setopt PROMPT_SUBST
+PROMPT='%F{2}%n%f@%F{4}%m%f:%F{214}%~%f${vcs_info_msg_0_} %(?.%F{214}.%F{196})%#%f '
 
 # --- Eklentiler ------------------------------------------------------------
 # autosuggestions önce, syntax-highlighting her zaman en sonda yüklenir.

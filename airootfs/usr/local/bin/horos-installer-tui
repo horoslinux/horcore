@@ -379,7 +379,7 @@ select_existing_partition_tui() {
       items+=("$pdev" "${pdev##*/}  $(human_size "$psz")  $pfs  $plabel")
     done
     choice="$(pick --menu "Formatlanacak bölümü seç ($dev):\n\nDiğer bölümlere dokunulmaz." 19 78 "${#lines[@]}" "${items[@]}")" || return 1
-    confirm "UYARI: $choice içindeki TÜM VERİLER SİLİNECEK.\n\nBu bölüm ext4 olarak formatlanıp HorOS kökü olacak.\nDevam edilsin mi?" 13 76 || continue
+    confirm "UYARI: $choice içindeki TÜM VERİLER SİLİNECEK.\n\nBu bölüm $fs_type olarak formatlanıp HorOS kökü olacak.\nDevam edilsin mi?" 13 76 || continue
 
     existing_part="$choice"
     existing_esp=""
@@ -417,6 +417,16 @@ step_disk() {
   IFS=$'\t' read -r name size model sec <<<"${lines[10#$pc - 1]}"
   if (( size < 8 * 1024 * 1024 * 1024 )); then
     info "Disk çok küçük (en az 8 GB gerekir)."; abort
+  fi
+
+  fs_type="$(pick --radiolist "Kök dosya sistemi:" 13 74 2 \
+    "ext4"  "Kararlı, basit, geniş donanım uyumluluğu" on \
+    "btrfs" "Kompresyon, alt birimler ve anlık görüntü desteği" off)" || abort
+  snapshots=0
+  if [[ "$fs_type" == "btrfs" ]]; then
+    if confirm "Snapper anlık görüntüleri, otomatik zamanlayıcılar ve GRUB menüsünden\nönyüklenebilir snapshot'lar kurulsun mu?\n\n(HorOS ilk kurulum anlık görüntüsü de oluşturulur.)" 13 78; then
+      snapshots=1
+    fi
   fi
 
   while true; do
@@ -533,6 +543,7 @@ step_final() {
   text+="Bölge    : $kb · $timezone · $lang ($lang_src)\n"
   text+="Yazılım  : $(profile_short "$profile") / $(desktop_label) · limon (temel)\n"
   text+="Disk     : $disk_v\n"
+  text+="Dosya sistemi: $fs_type$([[ "$fs_type" == "btrfs" && "$snapshots" == 1 ]] && echo ' + snapshot')\n"
   text+="Hesap    : root $root_v · $user_v\n"
   text+="Takas    : $(swap_label)\n"
   text+="Sürücüler: $driver_note\n\n"

@@ -75,6 +75,12 @@ if [[ ! -f "$ZSHRC_SRC" ]]; then
   echo "HATA: Eksik zsh yapılandırması: $ZSHRC_SRC" >&2
   exit 1
 fi
+# Installer bu dosyayı kurulan sistemin kullanıcılarına kopyalar.
+FASTFETCH_SRC="$ROOT/airootfs/usr/share/horos/dotfiles/fastfetch.jsonc"
+if [[ ! -f "$FASTFETCH_SRC" ]]; then
+  echo "HATA: Eksik fastfetch yapılandırması: $FASTFETCH_SRC" >&2
+  exit 1
+fi
 shopt -s nullglob
 wallpapers=("$WALLPAPER_DIR"/horos-wallpaper-*.jpg)
 if (( ${#wallpapers[@]} == 0 )); then

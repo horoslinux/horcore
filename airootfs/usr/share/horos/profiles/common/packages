@@ -8,6 +8,8 @@ plymouth
 # Günlük terminal araçları
 less
 htop
+# fastfetch: sistem bilgisi; otomatik banner yok, `fastfetch` ile çalıştırılır.
+fastfetch
 curl
 wget
 bash-completion

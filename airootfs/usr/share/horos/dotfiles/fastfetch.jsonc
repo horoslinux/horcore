@@ -1,0 +1,29 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "iterm",
+    "source": "/usr/share/pixmaps/horos-logo.png",
+    "width": 40,
+    "height": 11,
+    "padding": { "right": 2 }
+  },
+  "display": {
+    "color": {
+      "keys": "#FDC41D",
+      "title": "#FDC41D"
+    }
+  },
+  "modules": [
+    "title",
+    "separator",
+    "os",
+    "host",
+    "kernel",
+    "uptime",
+    "shell",
+    "cpu",
+    "memory",
+    "disk",
+    "packages"
+  ]
+}

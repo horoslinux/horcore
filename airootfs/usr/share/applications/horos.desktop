@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HorOS
+Comment=HorOS Linux belgeleri
+Exec=xdg-open https://horoslinux.github.io/docs
+Icon=horos
+Categories=Documentation;
+Terminal=false
+StartupNotify=true
