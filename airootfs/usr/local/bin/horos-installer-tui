@@ -364,7 +364,8 @@ step_accounts() {
 
 # ------------------------------------------------------------------ 5) Disk
 step_disk() {
-  local lines=() items=() l i=0 pc name size model sec pm psz psz_gb plan
+  local lines=() items=() spaces=() sitems=() l i=0 pc name size model sec pm psz psz_gb plan
+  local st sz chosen_start
   mapfile -t lines < <(list_disks)
   (( ${#lines[@]} > 0 )) || { info "Kurulabilecek disk bulunamadı."; abort; }
 
@@ -399,8 +400,25 @@ step_disk() {
         info "İstenen alan disk boyutundan büyük."
         continue
       fi
-      if ! plan="$(find_partial_plan "$name" "$psz")"; then
-        info "Yeterli boş alan bulunamadı.\nDiski küçültüp boş alan oluşturman gerekiyor."
+      # Kullanılabilir boş alanları listele; birden fazla varsa kullanıcı seçer.
+      mapfile -t spaces < <(list_partial_spaces "$name")
+      if (( ${#spaces[@]} == 0 )); then
+        info "Bu diskte en az 8 GB'lık boş alan yok.\nVar olan bir bölümü küçültüp boş alan oluşturman gerekiyor."
+        continue
+      fi
+      chosen_start=""
+      if (( ${#spaces[@]} > 1 )); then
+        sitems=()
+        for l in "${spaces[@]}"; do
+          IFS=$'\t' read -r st sz <<<"$l"
+          sitems+=("$st" "${st} MiB konumundan $(( sz / 1024 )) GB boş alan")
+        done
+        chosen_start="$(pick --menu "Boş alan seç ($name):" 18 74 "${#spaces[@]}" "${sitems[@]}")" || abort
+      else
+        IFS=$'\t' read -r chosen_start sz <<<"${spaces[0]}"
+      fi
+      if ! plan="$(find_partial_plan "$name" "$psz" "$chosen_start")"; then
+        info "Seçilen boş alan planlanamadı.\nFarklı bir alan veya boyut dene."
         continue
       fi
       IFS=$'\t' read -r partial_start partial_size partial_esp partial_esp_start partial_esp_size partial_esp_fs <<<"$plan"
