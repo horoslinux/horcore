@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # HorOS Linux — ISO'yu QEMU'da dene.   BIOS: ./test-qemu.sh   UEFI: UEFI=1 ./test-qemu.sh
+# Kaynaklar: QEMU_RAM=6144 QEMU_CPUS=4 (MB / çekirdek)
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 shopt -s nullglob
@@ -10,12 +11,16 @@ if ((${#isos[@]} == 0)); then
 fi
 iso="$(ls -1t "${isos[@]}" | head -n1)"
 
-args=(-m 4096 -smp 2 -cdrom "$iso" -boot d -nic user,model=virtio-net-pci)
+# Kaynaklar ortam değişkeniyle ayarlanabilir (varsayılan: 6 GB / 4 çekirdek).
+# WSL'de en az 8 CPU / 8 GB varsa bunlar rahat çalışır.
+ram="${QEMU_RAM:-6144}"
+cpus="${QEMU_CPUS:-4}"
+args=(-m "$ram" -smp "$cpus" -vga virtio -cdrom "$iso" -boot d -nic user,model=virtio-net-pci)
 
-if [[ -w /dev/kvm ]]; then
+if [[ -w /dev/kvm && -d /sys/module/kvm ]]; then
   args+=(-enable-kvm -cpu host)
 else
-  echo "KVM yok, yavaş (TCG) modda çalışılıyor." >&2
+  echo "KVM yok, yavaş (TCG) modda çalışılıyor. WSL içinden çalıştırdığından emin ol." >&2
 fi
 
 if [[ "${UEFI:-0}" == "1" ]]; then
