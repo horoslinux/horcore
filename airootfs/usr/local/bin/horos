@@ -4,6 +4,13 @@
 # Not: bilinçli olarak "set -e" yok; bir adım hata verirse kurulum ekranı kapanmasın.
 set -uo pipefail
 
+# Plymouth'u initramfs'tan beri açık tuttuk (plymouth-quit override'ı).
+# Splash'ı tam bu noktada kapatıyoruz; arayüz hemen çizileceği için siyah
+# geçiş olmuyor ve spinner -> TUI animasyonu kesintisiz devam ediyor.
+if command -v plymouth >/dev/null 2>&1; then
+  plymouth quit >/dev/null 2>&1 || true
+fi
+
 printf '\e[?25h'   # imleci görünür yap
 
 INSTALLER="/usr/local/bin/horos-installer-tui"

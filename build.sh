@@ -98,6 +98,16 @@ if (( ${#throbbers[@]} != 36 )); then
   echo "HATA: 36 spinner karesi bekleniyor, ${#throbbers[@]} bulundu: $PLYMOUTH_THEME" >&2
   exit 1
 fi
+# Splash, TUI çizilene kadar açık kalır; bu override'lar olmadan Plymouth
+# getty ile yarışır ve spinner ile kurulum ekranı arasında siyah boşluk oluşur.
+for plymouth_dropin in \
+  "$ROOT/airootfs/etc/systemd/system/plymouth-quit.service.d/10-horos.conf" \
+  "$ROOT/airootfs/etc/systemd/system/plymouth-quit-wait.service.d/10-horos.conf"; do
+  if [[ ! -f "$plymouth_dropin" ]]; then
+    echo "HATA: Eksik Plymouth geçiş birimi: $plymouth_dropin" >&2
+    exit 1
+  fi
+done
 
 # Simgeyi canlı sistemde de görünür yap (hicolor / pixmaps).
 ICON_DIR="$ROOT/airootfs/usr/share/icons/hicolor/512x512/apps"

@@ -652,9 +652,9 @@ commands.append(
     "sed -i 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; "
     "grep -q '^GRUB_DISABLE_OS_PROBER=' /etc/default/grub "
     "|| echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub; "
-    "sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash\"/' /etc/default/grub; "
+    "sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash plymouth.use-simpledrm=1\"/' /etc/default/grub; "
     "grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub "
-    "|| echo 'GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash\"' >> /etc/default/grub; "
+    "|| echo 'GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash plymouth.use-simpledrm=1\"' >> /etc/default/grub; "
     "grub-mkconfig -o /boot/grub/grub.cfg; "
     "sed -i -e 's#HorOS GNU/Linux#HorOS Linux#g' -e 's#Arch Linux#HorOS Linux#g' "
     "-e '/echo.*Loading Linux/d' -e '/echo.*Loading initial ramdisk/d' /boot/grub/grub.cfg; "
@@ -664,7 +664,7 @@ commands.append(
 commands.append(
     "for f in /boot/loader/entries/*.conf; do "
     "[ -f \"$f\" ] && sed -i 's/^\\(title[[:space:]]\\+\\)Arch Linux/\\1HorOS Linux/' \"$f\"; "
-    "[ -f \"$f\" ] && sed -i -E '/^options /{ /\\bquiet\\b/! s/$/ quiet/; /\\bsplash\\b/! s/$/ splash/; }' \"$f\"; "
+    "[ -f \"$f\" ] && sed -i -E '/^options /{ /\\bquiet\\b/! s/$/ quiet/; /\\bsplash\\b/! s/$/ splash/; /\\bplymouth\\.use-simpledrm\\b/! s/$/ plymouth.use-simpledrm=1/; }' \"$f\"; "
     "done; true"
 )
 
