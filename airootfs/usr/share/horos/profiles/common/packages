@@ -11,6 +11,10 @@ htop
 curl
 wget
 bash-completion
+# Kali tarzı geçmişten öneri (zsh-autosuggestions) için varsayılan kabuk zsh.
+zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
 man-db
 man-pages
 pciutils

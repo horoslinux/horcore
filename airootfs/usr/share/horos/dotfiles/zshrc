@@ -1,0 +1,43 @@
+# HorOS Linux — sessiz, profesyonel zsh yapılandırması.
+# Geçmişten öneri: yazmaya başlayınca gri öneri görünür;
+# → (sağ ok) veya End ile tamamlanır.
+
+# --- Geçmiş ---------------------------------------------------------------
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt EXTENDED_HISTORY
+setopt HIST_EXPIRE_DUPS_FIRST
+setopt HIST_IGNORE_DUPS
+setopt HIST_IGNORE_SPACE
+setopt INC_APPEND_HISTORY
+setopt SHARE_HISTORY
+
+# --- Kabuk davranışı ------------------------------------------------------
+setopt AUTO_CD
+setopt AUTO_PUSHD
+setopt PUSHD_IGNORE_DUPS
+setopt INTERACTIVE_COMMENTS
+unsetopt BEEP
+
+# --- Tamamlama ------------------------------------------------------------
+autoload -Uz compinit
+compinit -i
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+
+# --- İstem: tek satır, sade ------------------------------------------------
+PROMPT='%F{2}%n%f@%F{4}%m%f:%F{3}%~%f %# '
+
+# --- Eklentiler ------------------------------------------------------------
+# autosuggestions önce, syntax-highlighting her zaman en sonda yüklenir.
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=8'
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+
+ZSH_PLUGINS=/usr/share/zsh/plugins
+[[ -r "$ZSH_PLUGINS/zsh-autosuggestions/zsh-autosuggestions.zsh" ]] && \
+  source "$ZSH_PLUGINS/zsh-autosuggestions/zsh-autosuggestions.zsh"
+[[ -r "$ZSH_PLUGINS/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]] && \
+  source "$ZSH_PLUGINS/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+unset ZSH_PLUGINS

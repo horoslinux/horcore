@@ -69,6 +69,12 @@ for brand_file in "$BRAND_ICON" "$BRAND_LOGIN_LOGO"; do
     exit 1
   fi
 done
+# Kurulan sistemde geçmişten öneri (zsh-autosuggestions) için kabuk dosyası.
+ZSHRC_SRC="$ROOT/airootfs/usr/share/horos/dotfiles/zshrc"
+if [[ ! -f "$ZSHRC_SRC" ]]; then
+  echo "HATA: Eksik zsh yapılandırması: $ZSHRC_SRC" >&2
+  exit 1
+fi
 shopt -s nullglob
 wallpapers=("$WALLPAPER_DIR"/horos-wallpaper-*.jpg)
 if (( ${#wallpapers[@]} == 0 )); then

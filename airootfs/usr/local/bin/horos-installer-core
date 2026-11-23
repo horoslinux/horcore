@@ -564,7 +564,7 @@ if profile == "server":
 # Hesaplar
 if username:
     grp = "-G wheel " if admin else ""
-    commands.append(f"useradd -m {grp}-s /bin/bash {username}")
+    commands.append(f"useradd -m {grp}-s /bin/zsh {username}")
     commands.append(f"echo '{username}:{user_hash}' | chpasswd -e")
     if admin:
         packages.append("sudo")
@@ -576,6 +576,8 @@ if root_hash:
     commands.append(f"echo 'root:{root_hash}' | chpasswd -e")
 else:
     commands.append("passwd -l root")
+# Kullanıcı gibi root da zsh kullanır; .zshrc staging ile birlikte yazılır.
+commands.append("usermod -s /bin/zsh root")
 
 # Takas: ext4 kök üzerinde swapfile; bölüm düzenine dokunmaz, sürüm yükseltmelerinde kalır.
 # swapon chroot içinde açık bırakılmaz: aktif swapfile kök bölümü meşgul eder, archinstall
@@ -832,6 +834,16 @@ if os.path.isfile(wall_src):
     # Duvar kagitlari /usr/share/wallpapers altina kuruluyor; kullanici secim listesinde
     # gorunur. Varsayilan KDE duvar kagidini zorla ayarlamak icin ilk giriste
     # plasma-apply-wallpaperimage kullanilabilir; ama panel konfigini bozmamakoncecilik.
+
+# Kali tarzi gecmis onerileri (zsh-autosuggestions) icin zsh yapilandirmasi.
+# Yeni kullanicilar /etc/skel uzerinden, mevcut root ve kullanici ev dizinleri
+# dogrudan ayni dosyayi alir; staging kurulumdan sonra kopyalanir.
+zshrc_src = "/usr/share/horos/dotfiles/zshrc"
+if os.path.isfile(zshrc_src):
+    commands.append(write_cmd(zshrc_src, "/etc/skel/.zshrc", "644"))
+    commands.append(write_cmd(zshrc_src, "/root/.zshrc", "644"))
+    if username:
+        commands.append(write_cmd(zshrc_src, f"/home/{username}/.zshrc", "644"))
 
 # Kurulan sistem de live ISO ile ayni HorOS acilis ekranini kullanir.
 # archinstall hedefe yalnizca paketlerin varsayilan "bgrt" temasini birakir;
